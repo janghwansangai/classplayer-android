@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">클래스플레이어</string>
+    <string name="notification_channel">재생 알림</string>
+</resources>
