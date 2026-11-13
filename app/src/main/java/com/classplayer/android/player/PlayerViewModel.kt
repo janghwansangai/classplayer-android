@@ -59,14 +59,18 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     private val prefs = app.getSharedPreferences("classplayer", Context.MODE_PRIVATE)
     private var vrSurface: Surface? = null
+    private var pendingUrl: String? = null // 엔진 준비 전에 들어온 링크
 
     init {
         loadRecents()
         viewModelScope.launch {
             (app as ClassPlayerApp).ytReady.collect { s ->
                 when (s) {
-                    is ClassPlayerApp.YtState.Ready -> _state.update {
-                        it.copy(ytReady = true, ytVersion = runCatching { YoutubeDL.getInstance().version(app) }.getOrNull())
+                    is ClassPlayerApp.YtState.Ready -> {
+                        _state.update {
+                            it.copy(ytReady = true, ytVersion = runCatching { YoutubeDL.getInstance().version(app) }.getOrNull())
+                        }
+                        pendingUrl?.let { url -> pendingUrl = null; openLink(url) }
                     }
                     is ClassPlayerApp.YtState.Failed -> _state.update { it.copy(status = "유튜브 엔진 준비 실패: ${s.message}") }
                     else -> Unit
@@ -77,6 +81,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun connectController() {
+        // 컨트롤러 연결 전에 링크가 들어오면 연결 뒤에 다시 시도한다
         val ctx = getApplication<Application>()
         val token = SessionToken(ctx, ComponentName(ctx, PlaybackService::class.java))
         val future = MediaController.Builder(ctx, token).buildAsync()
@@ -85,6 +90,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                 .onSuccess { c ->
                     c.addListener(playerListener)
                     _controller.value = c
+                    pendingUrl?.let { url -> pendingUrl = null; openLink(url) }
                 }
                 .onFailure { e -> notify("재생 엔진 연결 실패: ${e.message}") }
         }, MoreExecutors.directExecutor())
@@ -123,9 +129,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun openLink(url: String) {
-        val c = _controller.value ?: run { notify("재생 엔진을 준비하는 중입니다. 잠시 후 다시 눌러 주세요."); return }
+        val c = _controller.value ?: run { pendingUrl = url; return }
         if (!_state.value.ytReady) {
-            notify("유튜브 엔진을 준비하는 중입니다(처음 한 번만 몇 초 걸립니다).")
+            pendingUrl = url
+            _state.update { it.copy(screen = UiState.Screen.Player, title = url, loading = "유튜브 엔진 준비 중…(처음 한 번만 몇 초 걸립니다)") }
             return
         }
         _state.update { it.copy(screen = UiState.Screen.Player, title = url, loading = "주소를 푸는 중…", is360 = false) }

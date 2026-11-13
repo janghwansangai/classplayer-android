@@ -33,9 +33,9 @@ class ClassPlayerApp : Application() {
             try {
                 YoutubeDL.getInstance().init(this@ClassPlayerApp)
                 FFmpeg.getInstance().init(this@ClassPlayerApp)
+                autoUpdateYtDlp() // 구버전으로 먼저 시도하면 403이 나므로 준비 완료 전에 업데이트한다
                 _ytReady.value = YtState.Ready
                 Log.i(TAG, "yt-dlp 준비 완료: " + YoutubeDL.getInstance().version(this@ClassPlayerApp))
-                autoUpdateYtDlp()
             } catch (e: Exception) {
                 Log.e(TAG, "yt-dlp 초기화 실패", e)
                 _ytReady.value = YtState.Failed(e.message ?: e.toString())
