@@ -2,9 +2,8 @@ package com.classplayer.android.player
 
 import android.app.Application
 import android.content.ComponentName
-import android.content.Context
+import android.content.Intent
 import android.net.Uri
-import android.os.Bundle
 import android.provider.OpenableColumns
 import android.util.Log
 import android.view.Surface
@@ -18,7 +17,11 @@ import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.classplayer.android.ClassPlayerApp
+import com.classplayer.android.data.LibraryRepository
+import com.classplayer.android.data.MediaEntry
+import com.classplayer.android.data.Playlist
 import com.classplayer.android.youtube.StreamResolver
+import com.classplayer.android.youtube.YoutubeMeta
 import com.google.common.util.concurrent.MoreExecutors
 import com.yausername.youtubedl_android.YoutubeDL
 import kotlinx.coroutines.Dispatchers
@@ -29,21 +32,29 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** 최근 재생 항목(홈 화면 목록용). */
-data class RecentItem(val label: String, val source: String, val isLink: Boolean)
-
+/** 화면 상태. */
 data class UiState(
     val screen: Screen = Screen.Home,
-    val title: String = "",
-    val status: String? = null,        // 토스트/상태 문구
-    val loading: String? = null,       // 로딩 문구(있으면 로딩 표시)
-    val is360: Boolean = false,
+    val homeTab: HomeTab = HomeTab.Playlists,
+    val editingPlaylistId: String? = null,
+    // 지금 재생 중인 큐
+    val queueName: String = "",
+    val queue: List<MediaEntry> = emptyList(),
+    val queueIndex: Int = -1,
+    val repeatMode: Int = Player.REPEAT_MODE_ALL,
+    val shuffle: Boolean = false,
     val audioOnly: Boolean = false,
+    val is360: Boolean = false,
+    val landscape: Boolean = false,
+    val status: String? = null,
+    val loading: String? = null,
     val ytReady: Boolean = false,
     val ytVersion: String? = null,
-    val recents: List<RecentItem> = emptyList(),
 ) {
-    enum class Screen { Home, Player }
+    enum class Screen { Home, Player, PlaylistEdit }
+    enum class HomeTab { Playlists, Favorites, Recents }
+    val current: MediaEntry? get() = queue.getOrNull(queueIndex)
+    val next: MediaEntry? get() = queue.getOrNull(queueIndex + 1) ?: if (repeatMode == Player.REPEAT_MODE_ALL) queue.firstOrNull()?.takeIf { queue.size > 1 } else null
 }
 
 /**
@@ -57,22 +68,21 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     private val _controller = MutableStateFlow<MediaController?>(null)
     val controller: StateFlow<MediaController?> = _controller.asStateFlow()
 
-    private val prefs = app.getSharedPreferences("classplayer", Context.MODE_PRIVATE)
+    val library: LibraryRepository = (app as ClassPlayerApp).library
+
     private var vrSurface: Surface? = null
-    private var pendingUrl: String? = null // 엔진 준비 전에 들어온 링크
+    private var pendingAction: (() -> Unit)? = null // 엔진 준비 전에 들어온 요청
+    private var inBackground = false
 
     init {
-        loadRecents()
         viewModelScope.launch {
             (app as ClassPlayerApp).ytReady.collect { s ->
                 when (s) {
                     is ClassPlayerApp.YtState.Ready -> {
-                        _state.update {
-                            it.copy(ytReady = true, ytVersion = runCatching { YoutubeDL.getInstance().version(app) }.getOrNull())
-                        }
-                        pendingUrl?.let { url -> pendingUrl = null; openLink(url) }
+                        _state.update { it.copy(ytReady = true, ytVersion = runCatching { YoutubeDL.getInstance().version(app) }.getOrNull()) }
+                        pendingAction?.let { a -> pendingAction = null; a() }
                     }
-                    is ClassPlayerApp.YtState.Failed -> _state.update { it.copy(status = "유튜브 엔진 준비 실패: ${s.message}") }
+                    is ClassPlayerApp.YtState.Failed -> notify("유튜브 엔진 준비 실패: ${s.message}")
                     else -> Unit
                 }
             }
@@ -81,7 +91,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun connectController() {
-        // 컨트롤러 연결 전에 링크가 들어오면 연결 뒤에 다시 시도한다
         val ctx = getApplication<Application>()
         val token = SessionToken(ctx, ComponentName(ctx, PlaybackService::class.java))
         val future = MediaController.Builder(ctx, token).buildAsync()
@@ -89,8 +98,9 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             runCatching { future.get() }
                 .onSuccess { c ->
                     c.addListener(playerListener)
+                    c.repeatMode = _state.value.repeatMode
                     _controller.value = c
-                    pendingUrl?.let { url -> pendingUrl = null; openLink(url) }
+                    pendingAction?.let { a -> pendingAction = null; a() }
                 }
                 .onFailure { e -> notify("재생 엔진 연결 실패: ${e.message}") }
         }, MoreExecutors.directExecutor())
@@ -100,148 +110,214 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         override fun onPlayerError(error: PlaybackException) {
             Log.e(ClassPlayerApp.TAG, "재생 오류", error)
             _state.update { it.copy(loading = null) }
-            notify("재생할 수 없습니다: ${error.errorCodeName}")
+            val cause = error.cause?.message?.takeIf { it.startsWith("유튜브") } ?: error.errorCodeName
+            notify("재생할 수 없습니다: $cause")
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             when (playbackState) {
-                Player.STATE_BUFFERING -> _state.update { it.copy(loading = "버퍼링 중…") }
-                Player.STATE_READY, Player.STATE_ENDED, Player.STATE_IDLE ->
-                    _state.update { if (it.loading == "버퍼링 중…") it.copy(loading = null) else it }
+                Player.STATE_BUFFERING -> _state.update { it.copy(loading = "불러오는 중…") }
+                else -> _state.update { it.copy(loading = null) }
             }
         }
+
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            val c = _controller.value ?: return
+            _state.update { it.copy(queueIndex = c.currentMediaItemIndex) }
+            _state.value.current?.let { library.addRecent(it) }
+        }
+
+        override fun onRepeatModeChanged(repeatMode: Int) { _state.update { it.copy(repeatMode = repeatMode) } }
+        override fun onShuffleModeEnabledChanged(enabled: Boolean) { _state.update { it.copy(shuffle = enabled) } }
     }
 
-    fun notify(message: String) {
-        _state.update { it.copy(status = message) }
-    }
-
+    fun notify(message: String) = _state.update { it.copy(status = message) }
     fun clearStatus() = _state.update { it.copy(status = null) }
 
-    /** 홈 화면의 입력(링크 또는 아무 텍스트)을 받아 재생한다. */
-    fun openText(text: String) {
-        val url = StreamResolver.extractUrl(text)
-        if (url == null) {
-            notify("링크를 찾지 못했습니다. 유튜브 링크를 붙여넣어 주세요.")
-            return
+    // ---- 화면 이동 ----
+    fun goHome() = _state.update { it.copy(screen = UiState.Screen.Home, landscape = false) }
+    fun goPlayer() = _state.update { it.copy(screen = UiState.Screen.Player) }
+    fun setHomeTab(t: UiState.HomeTab) = _state.update { it.copy(homeTab = t) }
+    fun openPlaylist(id: String) = _state.update { it.copy(screen = UiState.Screen.PlaylistEdit, editingPlaylistId = id) }
+    fun toggleLandscape() = _state.update { it.copy(landscape = !it.landscape) }
+
+    // ---- 재생 ----
+    private fun requireReady(action: () -> Unit): Boolean {
+        if (_controller.value == null || !_state.value.ytReady) {
+            pendingAction = action
+            _state.update { it.copy(screen = UiState.Screen.Player, loading = "엔진 준비 중…(처음 한 번만 몇 초 걸립니다)") }
+            return false
         }
+        return true
+    }
+
+    /** 항목 목록을 큐로 삼아 재생한다. */
+    fun playEntries(entries: List<MediaEntry>, startIndex: Int = 0, name: String = "지금 재생") {
+        if (entries.isEmpty()) { notify("재생할 항목이 없습니다"); return }
+        if (!requireReady { playEntries(entries, startIndex, name) }) return
+        val c = _controller.value!!
+        val items = entries.map { e ->
+            MediaItem.Builder()
+                .setMediaId(e.id)
+                .setMediaMetadata(MediaMetadata.Builder().setTitle(e.title).setArtist(name).setArtworkUri(e.thumbnail?.let(Uri::parse)).build())
+                .setRequestMetadata(MediaItem.RequestMetadata.Builder().setMediaUri(Uri.parse(e.source)).build())
+                .build()
+        }
+        _state.update {
+            it.copy(screen = UiState.Screen.Player, queueName = name, queue = entries, queueIndex = startIndex, loading = "불러오는 중…", is360 = entries[startIndex].title.contains("360"))
+        }
+        c.setMediaItems(items, startIndex, 0)
+        c.repeatMode = _state.value.repeatMode
+        c.shuffleModeEnabled = _state.value.shuffle
+        applyVideoEnabled(c)
+        c.prepare()
+        c.playWhenReady = true
+    }
+
+    fun playEntry(e: MediaEntry) = playEntries(listOf(e), 0, "지금 재생")
+
+    fun playPlaylist(p: Playlist, startIndex: Int = 0) = playEntries(p.items, startIndex, p.name)
+
+    fun playQueueIndex(i: Int) { _controller.value?.seekTo(i, 0); _controller.value?.play() }
+
+    /** 홈 입력(링크/공유 텍스트)을 받아 재생. */
+    fun openText(text: String) {
+        val url = StreamResolver.extractUrl(text) ?: run { notify("링크를 찾지 못했습니다. 유튜브 링크를 붙여넣어 주세요."); return }
         openLink(url)
     }
 
     fun openLink(url: String) {
-        val c = _controller.value ?: run { pendingUrl = url; return }
-        if (!_state.value.ytReady) {
-            pendingUrl = url
-            _state.update { it.copy(screen = UiState.Screen.Player, title = url, loading = "유튜브 엔진 준비 중…(처음 한 번만 몇 초 걸립니다)") }
-            return
-        }
-        _state.update { it.copy(screen = UiState.Screen.Player, title = url, loading = "주소를 푸는 중…", is360 = false) }
+        if (!requireReady { openLink(url) }) return
+        _state.update { it.copy(screen = UiState.Screen.Player, loading = "주소를 확인하는 중…") }
         viewModelScope.launch {
-            try {
-                val stream = StreamResolver.resolve(getApplication(), url)
-                val extras = Bundle().apply {
-                    stream.audioUrl?.let { putString(PlaybackService.KEY_AUDIO_URL, it) }
-                    stream.mimeType?.let { putString(PlaybackService.KEY_MIME, it) }
-                    putBundle(PlaybackService.KEY_HEADERS, Bundle().apply { stream.headers.forEach { (k, v) -> putString(k, v) } })
-                }
-                val item = MediaItem.Builder()
-                    .setMediaId(url)
-                    .setMediaMetadata(MediaMetadata.Builder().setTitle(stream.title).setArtist("클래스플레이어").build())
-                    .setRequestMetadata(
-                        MediaItem.RequestMetadata.Builder()
-                            .setMediaUri(Uri.parse(stream.videoUrl))
-                            .setExtras(extras)
-                            .build(),
-                    )
-                    .build()
-                _state.update { it.copy(title = stream.title, loading = "불러오는 중…", is360 = stream.is360) }
-                play(c, item)
-                addRecent(RecentItem(stream.title, url, isLink = true))
-            } catch (e: Exception) {
-                Log.e(ClassPlayerApp.TAG, "링크 해석 실패", e)
-                _state.update { it.copy(loading = null) }
-                notify("링크를 열 수 없습니다: ${e.message?.lineSequence()?.lastOrNull { it.isNotBlank() } ?: e}")
+            if (YoutubeMeta.playlistId(url) != null && YoutubeMeta.videoId(url) == null) {
+                val items = runCatching { YoutubeMeta.expandPlaylist(url) }.getOrElse { notify("재생목록을 읽지 못했습니다: ${it.message}"); emptyList() }
+                if (items.isNotEmpty()) playEntries(items, 0, "유튜브 재생목록")
+                return@launch
             }
+            val entry = if (StreamResolver.isYoutubeUrl(url)) YoutubeMeta.quickEntry(url)
+            else MediaEntry(title = url, source = url, isLink = true)
+            playEntry(entry)
         }
     }
 
-    /** 로컬 파일(content:// 또는 file://)을 연다. */
     fun openUri(uri: Uri) {
-        val c = _controller.value ?: run { notify("재생 엔진을 준비하는 중입니다."); return }
         viewModelScope.launch {
             val name = withContext(Dispatchers.IO) { displayName(uri) }
-            _state.update { it.copy(screen = UiState.Screen.Player, title = name, loading = "불러오는 중…", is360 = name.contains("360")) }
-            val item = MediaItem.Builder()
-                .setMediaId(uri.toString())
-                .setMediaMetadata(MediaMetadata.Builder().setTitle(name).setArtist("클래스플레이어").build())
-                .setRequestMetadata(MediaItem.RequestMetadata.Builder().setMediaUri(uri).build())
-                .build()
-            play(c, item)
-            addRecent(RecentItem(name, uri.toString(), isLink = false))
+            playEntry(MediaEntry(title = name, source = uri.toString(), isLink = false))
         }
-    }
-
-    fun openRecent(item: RecentItem) {
-        if (item.isLink) openLink(item.source) else openUri(Uri.parse(item.source))
-    }
-
-    private fun play(c: MediaController, item: MediaItem) {
-        c.setMediaItem(item)
-        applyAudioOnly(c, _state.value.audioOnly)
-        c.prepare()
-        c.playWhenReady = true
     }
 
     fun togglePlay() {
         val c = _controller.value ?: return
         if (c.isPlaying) c.pause() else { if (c.playbackState == Player.STATE_ENDED) c.seekTo(0); c.play() }
     }
-
-    fun seekBy(ms: Long) {
+    fun next() { _controller.value?.seekToNextMediaItem() }
+    fun previous() {
         val c = _controller.value ?: return
-        c.seekTo((c.currentPosition + ms).coerceIn(0, c.duration.coerceAtLeast(0)))
+        if (c.currentPosition > 3000 || !c.hasPreviousMediaItem()) c.seekTo(0) else c.seekToPreviousMediaItem()
+    }
+    fun seekBy(ms: Long) { val c = _controller.value ?: return; c.seekTo((c.currentPosition + ms).coerceIn(0, c.duration.coerceAtLeast(0))) }
+    fun seekTo(ms: Long) { _controller.value?.seekTo(ms) }
+    fun setSpeed(speed: Float) { _controller.value?.setPlaybackSpeed(speed) }
+
+    /** 반복: 전체 → 한 곡 → 끄기 → 전체 */
+    fun cycleRepeat() {
+        val next = when (_state.value.repeatMode) {
+            Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
+            Player.REPEAT_MODE_ONE -> Player.REPEAT_MODE_OFF
+            else -> Player.REPEAT_MODE_ALL
+        }
+        _state.update { it.copy(repeatMode = next) }
+        _controller.value?.repeatMode = next
+        notify(when (next) { Player.REPEAT_MODE_ALL -> "전체 반복"; Player.REPEAT_MODE_ONE -> "한 곡 반복"; else -> "반복 끄기" })
     }
 
-    fun setSpeed(speed: Float) {
-        _controller.value?.setPlaybackSpeed(speed)
+    fun toggleShuffle() {
+        val next = !_state.value.shuffle
+        _state.update { it.copy(shuffle = next) }
+        _controller.value?.shuffleModeEnabled = next
+        notify(if (next) "섞어서 재생" else "순서대로 재생")
     }
 
-    fun toggle360() {
-        _state.update { it.copy(is360 = !it.is360) }
-    }
+    fun toggle360() = _state.update { it.copy(is360 = !it.is360) }
 
-    /** 소리만 재생: 영상 트랙을 끄면 화면이 없어도 디코더가 돌지 않아 배터리를 아낀다. */
+    /** 소리만 재생: 영상 트랙을 끄면 디코더가 쉬어서 배터리를 아낀다. */
     fun toggleAudioOnly() {
         val next = !_state.value.audioOnly
         _state.update { it.copy(audioOnly = next) }
-        _controller.value?.let { applyAudioOnly(it, next) }
-        notify(if (next) "소리만 재생: 화면을 꺼도 계속 재생됩니다" else "영상 재생으로 돌아왔습니다")
+        _controller.value?.let { applyVideoEnabled(it) }
+        notify(if (next) "소리만 재생" else "영상 재생")
     }
 
-    private fun applyAudioOnly(c: MediaController, audioOnly: Boolean) {
+    private fun applyVideoEnabled(c: MediaController) {
+        val disabled = _state.value.audioOnly || inBackground
         c.trackSelectionParameters = c.trackSelectionParameters.buildUpon()
-            .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, audioOnly)
+            .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, disabled)
             .build()
     }
 
-    /** 360도 뷰가 만든 Surface를 플레이어에 연결한다(null이면 해제). */
     fun attachVrSurface(surface: Surface?) {
         vrSurface = surface
         val c = _controller.value ?: return
         if (surface != null) c.setVideoSurface(surface) else c.clearVideoSurface()
     }
 
-    /** 앱이 뒤로 갈 때: 소리만 재생 모드가 아니면 멈춘다(수업 중 실수로 소리만 나는 것 방지). */
-    fun onAppBackground() {
-        if (!_state.value.audioOnly) _controller.value?.pause()
+    /** 화면이 꺼지거나 앱이 뒤로 가도 계속 재생. 영상 디코딩만 멈춰 배터리를 아낀다. */
+    fun onAppBackground() { inBackground = true; _controller.value?.let { applyVideoEnabled(it) } }
+    fun onAppForeground() { inBackground = false; _controller.value?.let { applyVideoEnabled(it) } }
+
+    // ---- 즐겨찾기 ----
+    fun toggleFavorite(e: MediaEntry) {
+        val now = library.toggleFavorite(e)
+        notify(if (now) "즐겨찾기에 추가" else "즐겨찾기에서 제거")
     }
 
-    fun backToHome() {
-        _controller.value?.let { it.stop(); it.clearMediaItems() }
-        _state.update { it.copy(screen = UiState.Screen.Home, loading = null, is360 = false) }
+    fun isFavorite(e: MediaEntry?) = e != null && library.isFavorite(e.source)
+
+    // ---- 재생목록 관리 ----
+    fun createPlaylist(name: String, open: Boolean = true) {
+        val p = library.createPlaylist(name.ifBlank { "새 재생목록" })
+        if (open) openPlaylist(p.id)
+    }
+    fun renamePlaylist(id: String, name: String) { library.playlist(id)?.let { library.updatePlaylist(it.copy(name = name.ifBlank { it.name })) } }
+    fun deletePlaylist(id: String) { library.deletePlaylist(id); goHome() }
+    fun removeFromPlaylist(id: String, entryId: String) = library.removeFromPlaylist(id, entryId)
+    fun moveInPlaylist(id: String, from: Int, to: Int) = library.moveInPlaylist(id, from, to)
+
+    /** 유튜브 링크(단일 또는 재생목록 링크)를 재생목록에 추가. */
+    fun addLinkToPlaylist(playlistId: String, text: String) {
+        val url = StreamResolver.extractUrl(text) ?: run { notify("링크를 찾지 못했습니다"); return }
+        viewModelScope.launch {
+            try {
+                val entries = if (YoutubeMeta.playlistId(url) != null && YoutubeMeta.videoId(url) == null) {
+                    if (!_state.value.ytReady) { notify("엔진 준비 중입니다. 잠시 후 다시 시도해 주세요."); return@launch }
+                    notify("재생목록을 읽는 중…")
+                    YoutubeMeta.expandPlaylist(url)
+                } else listOf(if (StreamResolver.isYoutubeUrl(url)) YoutubeMeta.quickEntry(url) else MediaEntry(title = url, source = url, isLink = true))
+                library.addToPlaylist(playlistId, entries)
+                notify("${entries.size}개 추가했습니다")
+            } catch (e: Exception) {
+                notify("추가 실패: ${e.message}")
+            }
+        }
     }
 
-    /** yt-dlp 업데이트(유튜브 쪽 변경으로 재생이 안 될 때 사용). */
+    fun addUriToPlaylist(playlistId: String, uri: Uri) {
+        viewModelScope.launch {
+            val name = withContext(Dispatchers.IO) { displayName(uri) }
+            library.addToPlaylist(playlistId, listOf(MediaEntry(title = name, source = uri.toString(), isLink = false)))
+            notify("추가했습니다: $name")
+        }
+    }
+
+    fun addCurrentToPlaylist(playlistId: String) {
+        val e = _state.value.current ?: return
+        library.addToPlaylist(playlistId, listOf(e))
+        notify("재생목록에 추가했습니다")
+    }
+
+    // ---- 엔진 ----
     fun updateYtDlp() {
         notify("유튜브 엔진을 업데이트하는 중…")
         viewModelScope.launch(Dispatchers.IO) {
@@ -256,28 +332,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // ---- 최근 목록 ----
-    private fun loadRecents() {
-        val raw = prefs.getString("recents", "") ?: ""
-        val list = raw.lineSequence().filter { it.isNotBlank() }.mapNotNull { line ->
-            val p = line.split('\t')
-            if (p.size == 3) RecentItem(p[0], p[1], p[2] == "1") else null
-        }.toList()
-        _state.update { it.copy(recents = list) }
-    }
-
-    private fun addRecent(item: RecentItem) {
-        val list = (listOf(item) + _state.value.recents.filter { it.source != item.source }).take(10)
-        _state.update { it.copy(recents = list) }
-        prefs.edit().putString("recents", list.joinToString("\n") { "${it.label.replace('\t', ' ')}\t${it.source}\t${if (it.isLink) 1 else 0}" }).apply()
-    }
-
-    fun removeRecent(item: RecentItem) {
-        val list = _state.value.recents.filter { it.source != item.source }
-        _state.update { it.copy(recents = list) }
-        prefs.edit().putString("recents", list.joinToString("\n") { "${it.label}\t${it.source}\t${if (it.isLink) 1 else 0}" }).apply()
-    }
-
     private fun displayName(uri: Uri): String {
         if (uri.scheme == "file") return uri.lastPathSegment ?: "영상"
         return runCatching {
@@ -285,6 +339,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                 if (c.moveToFirst()) c.getString(0) else null
             }
         }.getOrNull() ?: uri.lastPathSegment ?: "영상"
+    }
+
+    fun persistUri(uri: Uri) {
+        runCatching { getApplication<Application>().contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
     }
 
     override fun onCleared() {

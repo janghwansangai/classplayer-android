@@ -1,7 +1,7 @@
 package com.classplayer.android.player
 
+import android.content.Context
 import android.content.Intent
-import android.os.Bundle
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -13,17 +13,17 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
-import androidx.media3.exoplayer.source.MergingMediaSource
-import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import com.classplayer.android.ClassPlayerApp
+import com.classplayer.android.youtube.StreamResolver
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 
 /**
  * 재생 엔진(ExoPlayer)을 들고 있는 포그라운드 서비스.
- * 화면(액티비티)은 MediaController로 여기에 붙어서 조작하고, 앱이 뒤로 가도
- * 소리만 재생 모드면 알림 컨트롤과 함께 계속 재생된다.
+ * 화면(액티비티)은 MediaController로 여기에 붙어서 조작하고, 앱이 뒤로 가거나
+ * 화면이 꺼져도 알림 컨트롤과 함께 계속 재생된다.
  */
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
@@ -68,7 +68,7 @@ class PlaybackService : MediaSessionService() {
 
     /**
      * 컨트롤러가 보낸 MediaItem은 재생 주소(localConfiguration)가 빠진 채로 오므로
-     * requestMetadata에 실어 보낸 주소와 부가 정보로 다시 조립한다.
+     * requestMetadata.mediaUri 로 다시 조립한다.
      */
     private class SessionCallback : MediaSession.Callback {
         override fun onAddMediaItems(
@@ -77,38 +77,28 @@ class PlaybackService : MediaSessionService() {
             mediaItems: MutableList<MediaItem>,
         ): ListenableFuture<MutableList<MediaItem>> {
             val rebuilt = mediaItems.map { item ->
-                val meta = item.requestMetadata
-                val uri = meta.mediaUri ?: return@map item
-                item.buildUpon()
-                    .setUri(uri)
-                    .setMimeType(meta.extras?.getString(KEY_MIME))
-                    .build()
+                val uri = item.requestMetadata.mediaUri ?: return@map item
+                item.buildUpon().setUri(uri).build()
             }
             return Futures.immediateFuture(rebuilt.toMutableList())
         }
     }
 
     companion object {
-        const val KEY_AUDIO_URL = "classplayer.audioUrl"
-        const val KEY_MIME = "classplayer.mime"
-        const val KEY_HEADERS = "classplayer.headers" // Bundle(String -> String)
-        const val USER_AGENT = "Mozilla/5.0 (Linux; Android 14) ClassPlayer/0.1"
+        const val USER_AGENT = "Mozilla/5.0 (Linux; Android 14) ClassPlayer/0.2"
     }
 }
 
 /**
- * 유튜브처럼 영상과 소리 주소가 따로 오면 둘을 MergingMediaSource로 묶고,
- * 그 밖에는 기본 팩토리(로컬 파일, HLS, DASH)에 맡긴다.
+ * 유튜브 링크면 지연 해석 소스(LazyYoutubeMediaSource)를, 그 밖(로컬 파일, 일반 http)은
+ * 기본 팩토리를 쓴다.
  */
 @OptIn(UnstableApi::class)
-class ClassMediaSourceFactory(context: android.content.Context) : MediaSource.Factory {
+class ClassMediaSourceFactory(private val context: Context) : MediaSource.Factory {
     private val http = DefaultHttpDataSource.Factory()
         .setUserAgent(PlaybackService.USER_AGENT)
         .setAllowCrossProtocolRedirects(true)
-        .setConnectTimeoutMs(15_000)
-        .setReadTimeoutMs(15_000)
-    private val dataSource = DefaultDataSource.Factory(context, http)
-    private val default = DefaultMediaSourceFactory(dataSource)
+    private val default = DefaultMediaSourceFactory(DefaultDataSource.Factory(context, http))
 
     override fun getSupportedTypes(): IntArray = default.supportedTypes
 
@@ -121,18 +111,13 @@ class ClassMediaSourceFactory(context: android.content.Context) : MediaSource.Fa
     }
 
     override fun createMediaSource(mediaItem: MediaItem): MediaSource {
-        val extras: Bundle? = mediaItem.requestMetadata.extras
-        val headerBundle = extras?.getBundle(PlaybackService.KEY_HEADERS)
-        val headers = HashMap<String, String>()
-        headerBundle?.keySet()?.forEach { k -> headerBundle.getString(k)?.let { headers[k] = it } }
-        http.setDefaultRequestProperties(headers)
-
-        val audioUrl = extras?.getString(PlaybackService.KEY_AUDIO_URL)
-        if (audioUrl.isNullOrEmpty()) return default.createMediaSource(mediaItem)
-
-        val progressive = ProgressiveMediaSource.Factory(dataSource)
-        val video = progressive.createMediaSource(mediaItem)
-        val audio = progressive.createMediaSource(MediaItem.fromUri(audioUrl))
-        return MergingMediaSource(true, video, audio)
+        val uri = mediaItem.localConfiguration?.uri?.toString() ?: return default.createMediaSource(mediaItem)
+        if (StreamResolver.isYoutubeUrl(uri)) {
+            val app = context.applicationContext as ClassPlayerApp
+            return LazyYoutubeMediaSource(context, mediaItem, uri) { title, dur ->
+                app.library.updateMeta(uri, title, dur.takeIf { it > 0 }, null)
+            }
+        }
+        return default.createMediaSource(mediaItem)
     }
 }

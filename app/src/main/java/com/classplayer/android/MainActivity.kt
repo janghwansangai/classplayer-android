@@ -2,6 +2,7 @@ package com.classplayer.android
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -23,16 +24,19 @@ import com.classplayer.android.player.PlayerViewModel
 import com.classplayer.android.player.UiState
 import com.classplayer.android.ui.HomeScreen
 import com.classplayer.android.ui.PlayerScreen
+import com.classplayer.android.ui.PlaylistScreen
 import com.classplayer.android.ui.theme.ClassPlayerTheme
 
 class MainActivity : ComponentActivity() {
     private val vm: PlayerViewModel by viewModels()
+    private var pickTargetPlaylist: String? = null // 파일 선택 결과를 넣을 재생목록(null이면 바로 재생)
 
     private val pickFile = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         uri ?: return@registerForActivityResult
-        // 최근 목록에서 다시 열 수 있게 읽기 권한을 오래 유지한다
-        runCatching { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-        vm.openUri(uri)
+        vm.persistUri(uri) // 나중에 다시 열 수 있게 읽기 권한 유지
+        val target = pickTargetPlaylist
+        pickTargetPlaylist = null
+        if (target != null) vm.addUriToPlaylist(target, uri) else vm.openUri(uri)
     }
 
     private val askNotification = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -40,42 +44,76 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (Build.VERSION.SDK_INT >= 33) askNotification.launch(Manifest.permission.POST_NOTIFICATIONS)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
 
         setContent {
             ClassPlayerTheme {
                 val state by vm.state.collectAsState()
                 val controller by vm.controller.collectAsState()
+                val playlists by vm.library.playlists.collectAsState()
+                val favorites by vm.library.favorites.collectAsState()
+                val recents by vm.library.recents.collectAsState()
                 val ctx = LocalContext.current
 
-                // 토스트 안내
                 LaunchedEffect(state.status) {
-                    state.status?.let { Toast.makeText(ctx, it, Toast.LENGTH_LONG).show(); vm.clearStatus() }
+                    state.status?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show(); vm.clearStatus() }
                 }
-                // 재생 화면에서는 전체화면 + 화면 꺼짐 방지
-                LaunchedEffect(state.screen) { applyImmersive(state.screen == UiState.Screen.Player) }
+                LaunchedEffect(state.screen, state.landscape) {
+                    val playing = state.screen == UiState.Screen.Player
+                    requestedOrientation = if (playing && state.landscape) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                    applyImmersive(playing && state.landscape)
+                    if (playing) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                }
 
                 when (state.screen) {
                     UiState.Screen.Home -> HomeScreen(
-                        state = state,
+                        state = state, playlists = playlists, favorites = favorites, recents = recents,
+                        isPlaying = controller?.isPlaying == true,
+                        onTab = vm::setHomeTab,
                         onPlayText = vm::openText,
-                        onPickFile = { pickFile.launch(arrayOf("video/*", "audio/*")) },
-                        onOpenRecent = vm::openRecent,
-                        onRemoveRecent = vm::removeRecent,
+                        onPickFile = { pickTargetPlaylist = null; pickFile.launch(arrayOf("video/*", "audio/*")) },
+                        onOpenPlaylist = { vm.openPlaylist(it.id) },
+                        onPlayPlaylist = { vm.playPlaylist(it) },
+                        onCreatePlaylist = { vm.createPlaylist(it) },
+                        onPlayEntry = vm::playEntry,
+                        onToggleFavorite = vm::toggleFavorite,
+                        onOpenPlayer = { if (state.current != null) vm.goPlayer() else vm.notify("재생 중인 영상이 없습니다") },
+                        onTogglePlay = vm::togglePlay,
+                        onNext = vm::next,
                         onUpdateYt = vm::updateYtDlp,
                     )
                     UiState.Screen.Player -> {
-                        BackHandler { vm.backToHome() }
+                        BackHandler { if (state.landscape) vm.toggleLandscape() else vm.goHome() }
                         PlayerScreen(
-                            state = state,
-                            player = controller,
-                            onBack = vm::backToHome,
-                            onTogglePlay = vm::togglePlay,
-                            onSeekBy = vm::seekBy,
-                            onSeekTo = { controller?.seekTo(it) },
-                            onSetSpeed = vm::setSpeed,
-                            onToggle360 = vm::toggle360,
-                            onToggleAudioOnly = vm::toggleAudioOnly,
+                            state = state, player = controller, playlists = playlists,
+                            isFavorite = vm.isFavorite(state.current) && favorites.any { it.source == state.current?.source },
+                            onBack = vm::goHome,
+                            onTogglePlay = vm::togglePlay, onNext = vm::next, onPrevious = vm::previous,
+                            onSeekBy = vm::seekBy, onSeekTo = vm::seekTo, onSetSpeed = vm::setSpeed,
+                            onCycleRepeat = vm::cycleRepeat, onToggleShuffle = vm::toggleShuffle,
+                            onToggle360 = vm::toggle360, onToggleAudioOnly = vm::toggleAudioOnly,
+                            onToggleLandscape = vm::toggleLandscape,
+                            onToggleFavorite = { state.current?.let(vm::toggleFavorite) },
+                            onAddToPlaylist = vm::addCurrentToPlaylist,
+                            onCreatePlaylist = { name -> vm.createPlaylist(name, open = false); vm.library.playlists.value.lastOrNull()?.let { vm.addCurrentToPlaylist(it.id) } },
+                            onPlayQueueIndex = vm::playQueueIndex,
                             onVrSurface = vm::attachVrSurface,
+                        )
+                    }
+                    UiState.Screen.PlaylistEdit -> {
+                        val p = playlists.firstOrNull { it.id == state.editingPlaylistId }
+                        BackHandler { vm.goHome() }
+                        if (p == null) vm.goHome() else PlaylistScreen(
+                            playlist = p, repeatMode = state.repeatMode, shuffle = state.shuffle, ytReady = state.ytReady,
+                            onBack = vm::goHome,
+                            onRename = { vm.renamePlaylist(p.id, it) },
+                            onDelete = { vm.deletePlaylist(p.id) },
+                            onAddLink = { vm.addLinkToPlaylist(p.id, it) },
+                            onAddFile = { pickTargetPlaylist = p.id; pickFile.launch(arrayOf("video/*", "audio/*")) },
+                            onRemove = { vm.removeFromPlaylist(p.id, it) },
+                            onMove = { a, b -> vm.moveInPlaylist(p.id, a, b) },
+                            onPlayFrom = { vm.playPlaylist(vm.library.playlist(p.id) ?: p, it) },
+                            onCycleRepeat = vm::cycleRepeat, onToggleShuffle = vm::toggleShuffle,
                         )
                     }
                 }
@@ -99,23 +137,20 @@ class MainActivity : ComponentActivity() {
                 if (uri.scheme == "http" || uri.scheme == "https") vm.openLink(uri.toString()) else vm.openUri(uri)
             }
         }
-        intent.action = null // 회전 등으로 다시 들어와도 중복 재생하지 않게
+        intent.action = null
     }
 
     private fun applyImmersive(on: Boolean) {
         val c = WindowCompat.getInsetsController(window, window.decorView)
         if (on) {
-            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             c.hide(WindowInsetsCompat.Type.systemBars())
             c.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         } else {
-            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             c.show(WindowInsetsCompat.Type.systemBars())
+            c.isAppearanceLightStatusBars = false
         }
     }
 
-    override fun onStop() {
-        super.onStop()
-        vm.onAppBackground()
-    }
+    override fun onStart() { super.onStart(); vm.onAppForeground() }
+    override fun onStop() { super.onStop(); vm.onAppBackground() }
 }

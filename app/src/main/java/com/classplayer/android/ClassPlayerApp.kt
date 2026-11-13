@@ -2,6 +2,7 @@ package com.classplayer.android
 
 import android.app.Application
 import android.util.Log
+import com.classplayer.android.data.LibraryRepository
 import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import kotlinx.coroutines.CoroutineScope
@@ -17,6 +18,9 @@ import kotlinx.coroutines.launch
  */
 class ClassPlayerApp : Application() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** 재생목록·즐겨찾기 저장소(앱 전체에서 하나). */
+    val library: LibraryRepository by lazy { LibraryRepository(this) }
 
     private val _ytReady = MutableStateFlow<YtState>(YtState.Loading)
     val ytReady: StateFlow<YtState> = _ytReady

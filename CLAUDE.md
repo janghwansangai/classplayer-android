@@ -9,3 +9,5 @@
 - 360도: SphereRenderer(u = 1 - lon, v = 1 - lat, view = rotX(-pitch)·rotY(-yaw)). 2026-11-13 색상 라벨 영상으로 방향 검증. 바꾸면 반드시 다시 확인.
 - 검증 방법: `adb shell am start -a android.intent.action.VIEW -d <content uri 또는 유튜브 링크> -n com.classplayer.android/.MainActivity` 후 `adb exec-out screencap -p`로 캡처해서 직접 본다.
 - 아직 없는 것: 실기기 검증, HEVC/AV1 실기 확인, 유튜브 생방송 테스트, 다운로드(미리 받기) 기능.
+- v0.2.0(시안 B 다크 뮤직형): 재생목록/즐겨찾기/최근은 `data/LibraryRepository`(files/library.json). 유튜브 큐는 `player/LazyYoutubeMediaSource`가 재생 직전에 yt-dlp로 푼다(ExoPlayer가 다음 곡을 미리 준비하므로 곡 넘김이 빠름). 링크 제목·썸네일은 `youtube/YoutubeMeta`(oEmbed, 재생목록 링크는 yt-dlp --flat-playlist). 앱이 뒤로 가면 영상 트랙만 끄고 계속 재생(`onAppBackground`).
+- 디자인 시안 캔버스: https://claude.ai/artifact/W1fDqmSqS5ZZZ7tvy2LZch (A 밝은 카드형, B 다크 뮤직형(채택), C 한 손 미니멀).
