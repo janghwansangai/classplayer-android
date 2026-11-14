@@ -12,10 +12,12 @@ data class MediaEntry(
     val isLink: Boolean,
     val durationSec: Long = 0,
     val thumbnail: String? = null, // 유튜브 썸네일 URL(로컬은 null → 영상에서 추출)
+    val channel: String? = null,   // 유튜브 채널 이름(검색 결과에서)
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("id", id).put("title", title).put("source", source).put("isLink", isLink)
         .put("durationSec", durationSec).put("thumbnail", thumbnail ?: JSONObject.NULL)
+        .put("channel", channel ?: JSONObject.NULL)
 
     companion object {
         fun fromJson(o: JSONObject) = MediaEntry(
@@ -25,6 +27,7 @@ data class MediaEntry(
             isLink = o.optBoolean("isLink", true),
             durationSec = o.optLong("durationSec", 0),
             thumbnail = o.optString("thumbnail").takeIf { it.isNotEmpty() && !o.isNull("thumbnail") },
+            channel = o.optString("channel").takeIf { it.isNotEmpty() && !o.isNull("channel") },
         )
     }
 }

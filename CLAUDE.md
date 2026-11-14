@@ -17,3 +17,4 @@
 - 예약 시작(안드로이드 15): 알람으로 시작한 포그라운드 서비스는 오디오 포커스 요청이 막힌다(HardeningEnforcer, procState 4여도). 그래서 예약 재생 때만 handleAudioFocus=false, 사용자가 직접 재생을 누르면 다시 켠다. playWhenReady를 prepare 전에 켜야 Media3가 포그라운드를 유지한다.
 - 예약 알람은 앱 업데이트/재설치 때 지워지므로 앱 시작과 MY_PACKAGE_REPLACED, BOOT_COMPLETED에서 Scheduler.restore.
 - 자동 업데이트는 같은 서명 키가 필요하다. 지금은 이 맥의 ~/.android/debug.keystore로 릴리스를 서명하므로 다른 컴퓨터에서 빌드하면 업데이트 설치가 실패한다.
+- v0.4.0 유튜브 검색: youtube/YoutubeSearch.kt(yt-dlp "ytsearch20:검색어" --flat-playlist --print id/title/channel/duration, 데스크톱과 같은 방식, 에뮬레이터 약 3초), ui/SearchScreen.kt. 홈 입력칸에서 링크가 아니면 검색(PlayerViewModel.openText). 검색 결과에서 재생하면 뒤로 가기 때 검색 화면으로 돌아간다(backToSearch).

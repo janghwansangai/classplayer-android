@@ -47,7 +47,7 @@ object StreamResolver {
     private val inflight = ConcurrentHashMap<String, Deferred<ResolvedStream>>()
 
     /** yt-dlp(파이썬)를 동시에 여러 개 돌리면 서로 CPU를 뺏어 모두 느려지므로 하나씩 돌린다. */
-    private val gate = Semaphore(1)
+    internal val gate = Semaphore(1)
 
     /** 문자열 안에서 http(s) 링크 하나를 꺼낸다(공유 텍스트에 제목이 섞여 올 수 있다). */
     fun extractUrl(text: String): String? =

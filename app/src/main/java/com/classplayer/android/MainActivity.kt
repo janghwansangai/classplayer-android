@@ -25,6 +25,7 @@ import com.classplayer.android.player.UiState
 import com.classplayer.android.ui.HomeScreen
 import com.classplayer.android.ui.PlayerScreen
 import com.classplayer.android.ui.PlaylistScreen
+import com.classplayer.android.ui.SearchScreen
 import com.classplayer.android.ui.SettingsScreen
 import com.classplayer.android.ui.theme.Bg
 import com.classplayer.android.ui.theme.ClassPlayerTheme
@@ -145,6 +146,17 @@ class MainActivity : ComponentActivity() {
                             onMove = { a, b -> vm.moveInPlaylist(p.id, a, b) },
                             onPlayFrom = { vm.playPlaylist(vm.library.playlist(p.id) ?: p, it) },
                             onCycleRepeat = vm::cycleRepeat, onToggleShuffle = vm::toggleShuffle,
+                        )
+                    }
+                    UiState.Screen.Search -> {
+                        BackHandler { vm.goHome() }
+                        SearchScreen(
+                            state = state, playlists = playlists,
+                            onBack = vm::goHome,
+                            onSearch = vm::search,
+                            onPlay = vm::playSearchResult,
+                            onAddToPlaylist = { id, e -> vm.addEntryToPlaylist(id, e) },
+                            onCreatePlaylistWith = { name, e -> vm.createPlaylistWith(name, e) },
                         )
                     }
                     UiState.Screen.Settings -> {

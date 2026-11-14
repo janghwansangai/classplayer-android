@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.AlertDialog
@@ -130,13 +131,17 @@ fun HomeScreen(
         Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
                 value = text, onValueChange = { text = it }, modifier = Modifier.weight(1f).height(52.dp),
-                placeholder = { Text("유튜브 링크 붙여넣기", fontSize = 14.sp, color = Muted) }, singleLine = true,
+                placeholder = { Text("유튜브 링크 또는 검색어", fontSize = 14.sp, color = Muted) }, singleLine = true,
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { onPlayText(text) }),
                 textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = Ink),
                 shape = RoundedCornerShape(26.dp),
                 colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Accent, unfocusedBorderColor = Line, focusedContainerColor = Surface, unfocusedContainerColor = Surface),
                 trailingIcon = { IconButton(onClick = { clipboard.getText()?.text?.let { text = it } }) { Icon(Icons.Default.ContentPaste, "붙여넣기", tint = Accent) } },
             )
-            RoundIconButton(Icons.Default.PlayArrow, "재생", 52.dp, Accent, Bg) { onPlayText(text) }
+            // 링크면 재생, 글이면 유튜브 검색
+            val isLink = text.contains("http://") || text.contains("https://")
+            RoundIconButton(if (isLink || text.isBlank()) Icons.Default.PlayArrow else Icons.Default.Search, if (isLink) "재생" else "검색", 52.dp, Accent, Bg) { onPlayText(text) }
             RoundIconButton(Icons.Default.FolderOpen, "내 영상 열기", 52.dp, Surface, Ink, onPickFile)
         }
 

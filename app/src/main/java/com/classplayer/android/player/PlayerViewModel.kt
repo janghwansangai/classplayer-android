@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.first
 import java.net.URLEncoder
 import com.classplayer.android.youtube.StreamResolver
 import com.classplayer.android.youtube.YoutubeMeta
+import com.classplayer.android.youtube.YoutubeSearch
 import com.google.common.util.concurrent.MoreExecutors
 import com.yausername.youtubedl_android.YoutubeDL
 import kotlinx.coroutines.Dispatchers
@@ -58,8 +59,14 @@ data class UiState(
     val ytReady: Boolean = false,
     val ytVersion: String? = null,
     val updateDialogDismissed: Boolean = false,
+    // 유튜브 검색
+    val searchQuery: String = "",
+    val searchResults: List<MediaEntry> = emptyList(),
+    val searching: Boolean = false,
+    val searchError: String? = null,
+    val backToSearch: Boolean = false, // 검색 결과에서 재생했으면 뒤로 가기 때 검색 화면으로
 ) {
-    enum class Screen { Home, Player, PlaylistEdit, Settings }
+    enum class Screen { Home, Player, PlaylistEdit, Settings, Search }
     enum class HomeTab { Playlists, Favorites, Saved, Recents }
     val current: MediaEntry? get() = queue.getOrNull(queueIndex)
     val next: MediaEntry? get() = queue.getOrNull(queueIndex + 1) ?: if (repeatMode == Player.REPEAT_MODE_ALL) queue.firstOrNull()?.takeIf { queue.size > 1 } else null
@@ -165,7 +172,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     fun clearStatus() = _state.update { it.copy(status = null) }
 
     // ---- 화면 이동 ----
-    fun goHome() = _state.update { it.copy(screen = UiState.Screen.Home, landscape = false) }
+    fun goHome() = _state.update {
+        val toSearch = it.screen == UiState.Screen.Player && it.backToSearch && it.searchResults.isNotEmpty()
+        it.copy(screen = if (toSearch) UiState.Screen.Search else UiState.Screen.Home, landscape = false)
+    }
     fun goPlayer() = _state.update { it.copy(screen = UiState.Screen.Player) }
     fun setHomeTab(t: UiState.HomeTab) = _state.update { it.copy(homeTab = t) }
     fun openPlaylist(id: String) = _state.update { it.copy(screen = UiState.Screen.PlaylistEdit, editingPlaylistId = id) }
@@ -191,7 +201,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         StreamResolver.prefetch(getApplication(), entries[startIndex].source)
         prefetchAfter(startIndex, entries)
         _state.update {
-            it.copy(screen = UiState.Screen.Player, queueName = name, queue = entries, queueIndex = startIndex, loading = "불러오는 중…", is360 = entries[startIndex].title.contains("360"))
+            it.copy(screen = UiState.Screen.Player, backToSearch = false, queueName = name, queue = entries, queueIndex = startIndex, loading = "불러오는 중…", is360 = entries[startIndex].title.contains("360"))
         }
         c.setMediaItems(items, startIndex, 0)
         c.repeatMode = _state.value.repeatMode
@@ -209,7 +219,9 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 홈 입력(링크/공유 텍스트)을 받아 재생. */
     fun openText(text: String) {
-        val url = StreamResolver.extractUrl(text) ?: run { notify("링크를 찾지 못했습니다. 유튜브 링크를 붙여넣어 주세요."); return }
+        if (text.isBlank()) { notify("유튜브 링크나 검색어를 넣어 주세요"); return }
+        // 링크가 아니면 유튜브에서 검색
+        val url = StreamResolver.extractUrl(text) ?: run { search(text.trim()); return }
         openLink(url)
     }
 
@@ -324,6 +336,46 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     fun prefetchPlaylist(p: Playlist) { p.items.firstOrNull()?.let { StreamResolver.prefetch(getApplication(), it.source) } }
 
     fun goSettings() = _state.update { it.copy(screen = UiState.Screen.Settings) }
+
+    // ---- 유튜브 검색 ----
+    private var searchJob: kotlinx.coroutines.Job? = null
+
+    fun search(query: String) {
+        val q = query.trim()
+        if (q.isEmpty()) return
+        _state.update { it.copy(screen = UiState.Screen.Search, searchQuery = q, searching = true, searchError = null, searchResults = emptyList()) }
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch {
+            val r = runCatching { YoutubeSearch.search(getApplication(), q) }
+            if (_state.value.searchQuery != q) return@launch
+            r.onSuccess { list ->
+                _state.update { it.copy(searching = false, searchResults = list, searchError = if (list.isEmpty()) "검색 결과가 없습니다" else null) }
+            }.onFailure { e ->
+                if (e is kotlinx.coroutines.CancellationException) return@launch
+                Log.e(ClassPlayerApp.TAG, "검색 실패", e)
+                _state.update { it.copy(searching = false, searchError = "검색하지 못했습니다. 인터넷 연결을 확인해 주세요.") }
+            }
+        }
+    }
+
+    fun goSearch() = _state.update { it.copy(screen = UiState.Screen.Search) }
+
+    /** 검색 결과를 큐로 삼아 고른 곡부터 재생(다음 곡 버튼으로 이어 듣기). */
+    fun playSearchResult(index: Int) {
+        val s = _state.value
+        playEntries(s.searchResults, index, "검색: ${s.searchQuery}")
+        _state.update { it.copy(backToSearch = true) }
+    }
+
+    fun addEntryToPlaylist(playlistId: String, e: MediaEntry) {
+        library.addToPlaylist(playlistId, listOf(e))
+        notify("'${library.playlist(playlistId)?.name ?: "재생목록"}'에 추가했습니다")
+    }
+
+    fun createPlaylistWith(name: String, e: MediaEntry) {
+        val p = library.createPlaylist(name.ifBlank { "새 재생목록" })
+        addEntryToPlaylist(p.id, e)
+    }
 
     // ---- 녹화·녹음 ----
     fun startRecord(audioOnly: Boolean, startMs: Long?, endMs: Long?) {
