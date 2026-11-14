@@ -2,7 +2,10 @@ package com.classplayer.android
 
 import android.app.Application
 import android.util.Log
+import com.classplayer.android.data.AppSettings
 import com.classplayer.android.data.LibraryRepository
+import com.classplayer.android.record.RecordManager
+import com.classplayer.android.schedule.Scheduler
 import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import kotlinx.coroutines.CoroutineScope
@@ -22,6 +25,12 @@ class ClassPlayerApp : Application() {
     /** 재생목록·즐겨찾기 저장소(앱 전체에서 하나). */
     val library: LibraryRepository by lazy { LibraryRepository(this) }
 
+    /** 사용자 설정. */
+    val settings: AppSettings by lazy { AppSettings(this) }
+
+    /** 녹화·녹음(저장) 관리. */
+    val recorder: RecordManager by lazy { RecordManager(this) }
+
     private val _ytReady = MutableStateFlow<YtState>(YtState.Loading)
     val ytReady: StateFlow<YtState> = _ytReady
 
@@ -33,6 +42,7 @@ class ClassPlayerApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        Scheduler.restore(this) // 앱 업데이트 등으로 지워진 예약 알람을 다시 건다
         scope.launch {
             try {
                 YoutubeDL.getInstance().init(this@ClassPlayerApp)
@@ -40,6 +50,8 @@ class ClassPlayerApp : Application() {
                 autoUpdateYtDlp() // 구버전으로 먼저 시도하면 403이 나므로 준비 완료 전에 업데이트한다
                 _ytReady.value = YtState.Ready
                 Log.i(TAG, "yt-dlp 준비 완료: " + YoutubeDL.getInstance().version(this@ClassPlayerApp))
+                // 파이썬을 한 번 띄워 두면(파일이 메모리에 올라와) 첫 유튜브 열기가 몇 초 빨라진다
+                runCatching { YoutubeDL.getInstance().execute(com.yausername.youtubedl_android.YoutubeDLRequest(emptyList()).apply { addOption("--version") }) }
             } catch (e: Exception) {
                 Log.e(TAG, "yt-dlp 초기화 실패", e)
                 _ytReady.value = YtState.Failed(e.message ?: e.toString())

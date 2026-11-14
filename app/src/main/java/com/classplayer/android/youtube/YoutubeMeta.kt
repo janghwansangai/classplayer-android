@@ -51,8 +51,8 @@ object YoutubeMeta {
     }
 
     /** 재생목록 링크를 항목 목록으로 펼친다(yt-dlp 필요). */
-    suspend fun expandPlaylist(url: String): List<MediaEntry> = withContext(Dispatchers.IO) {
-        val req = YoutubeDLRequest(url).apply {
+    suspend fun expandPlaylist(context: android.content.Context, url: String): List<MediaEntry> = withContext(Dispatchers.IO) {
+        val req = YoutubeDLRequest(url).withCache(context).apply {
             addOption("--flat-playlist")
             addOption("--no-warnings")
             addOption("--print", "%(id)s\t%(title)s\t%(duration)s")

@@ -89,6 +89,14 @@ class LibraryRepository(context: Context) {
         save()
     }
 
+    /** 지운 파일 등, 주소가 같은 항목을 모든 목록에서 뺀다. */
+    fun removeSource(source: String) {
+        _playlists.update { l -> l.map { p -> p.copy(items = p.items.filter { it.source != source }) } }
+        _favorites.update { l -> l.filter { it.source != source } }
+        _recents.update { l -> l.filter { it.source != source } }
+        save()
+    }
+
     // ---- 즐겨찾기 ----
     fun isFavorite(source: String) = _favorites.value.any { it.source == source }
 

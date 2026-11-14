@@ -40,6 +40,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -56,6 +57,12 @@ import com.classplayer.android.data.MediaEntry
 import com.classplayer.android.data.Playlist
 import com.classplayer.android.data.formatDuration
 import com.classplayer.android.player.UiState
+import com.classplayer.android.record.RecordJob
+import com.classplayer.android.record.SavedFile
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.LinearProgressIndicator
 import com.classplayer.android.ui.theme.Accent
 import com.classplayer.android.ui.theme.Bg
 import com.classplayer.android.ui.theme.CoverColors
@@ -70,6 +77,8 @@ fun HomeScreen(
     playlists: List<Playlist>,
     favorites: List<MediaEntry>,
     recents: List<MediaEntry>,
+    saved: List<SavedFile>,
+    jobs: List<RecordJob>,
     isPlaying: Boolean,
     onTab: (UiState.HomeTab) -> Unit,
     onPlayText: (String) -> Unit,
@@ -82,22 +91,25 @@ fun HomeScreen(
     onOpenPlayer: () -> Unit,
     onTogglePlay: () -> Unit,
     onNext: () -> Unit,
-    onUpdateYt: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onPlaySaved: (Int) -> Unit,
+    onDeleteSaved: (SavedFile) -> Unit,
+    onCancelJob: (String) -> Unit,
 ) {
     var text by rememberSaveable { mutableStateOf("") }
     var newName by rememberSaveable { mutableStateOf<String?>(null) }
-    var showSettings by rememberSaveable { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
 
     Column(Modifier.fillMaxSize().background(Bg)) {
-        Row(Modifier.padding(start = 20.dp, end = 12.dp, top = 52.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(start = 20.dp, end = 12.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("라이브러리", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Ink, modifier = Modifier.weight(1f))
-            IconButton(onClick = { showSettings = true }, modifier = Modifier.size(44.dp).clip(RoundedCornerShape(22.dp)).background(Surface)) { Icon(Icons.Default.Settings, "설정", tint = Ink) }
+            IconButton(onClick = onOpenSettings, modifier = Modifier.size(44.dp).clip(RoundedCornerShape(22.dp)).background(Surface)) { Icon(Icons.Default.Settings, "설정", tint = Ink) }
         }
 
-        Row(Modifier.padding(horizontal = 20.dp, vertical = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Pill("재생목록", state.homeTab == UiState.HomeTab.Playlists, { onTab(UiState.HomeTab.Playlists) })
             Pill("즐겨찾기", state.homeTab == UiState.HomeTab.Favorites, { onTab(UiState.HomeTab.Favorites) })
+            Pill("저장됨" + if (jobs.isNotEmpty()) " ·${jobs.size}" else "", state.homeTab == UiState.HomeTab.Saved, { onTab(UiState.HomeTab.Saved) })
             Pill("최근", state.homeTab == UiState.HomeTab.Recents, { onTab(UiState.HomeTab.Recents) })
         }
 
@@ -107,6 +119,7 @@ fun HomeScreen(
                 UiState.HomeTab.Favorites -> EntryList(favorites, "하트를 누른 영상이 여기에 모입니다.", onPlayEntry) { e ->
                     SmallIcon(Icons.Default.Favorite, "즐겨찾기 해제", tint = Accent) { onToggleFavorite(e) }
                 }
+                UiState.HomeTab.Saved -> SavedTab(saved, jobs, onPlaySaved, onDeleteSaved, onCancelJob)
                 UiState.HomeTab.Recents -> EntryList(recents, "아직 재생한 영상이 없습니다.", onPlayEntry) { e ->
                     SmallIcon(Icons.Default.PlayArrow, "재생", tint = Ink) { onPlayEntry(e) }
                 }
@@ -148,7 +161,7 @@ fun HomeScreen(
         Row(Modifier.fillMaxWidth().height(72.dp).background(Bg).padding(top = 6.dp), horizontalArrangement = Arrangement.SpaceAround) {
             NavItem(Icons.Default.LibraryMusic, "라이브러리", true) { onTab(UiState.HomeTab.Playlists) }
             NavItem(Icons.Default.PlayCircle, "지금 재생", false, onOpenPlayer)
-            NavItem(Icons.Default.Settings, "설정", false) { showSettings = true }
+            NavItem(Icons.Default.Settings, "설정", false, onOpenSettings)
         }
     }
 
@@ -159,21 +172,6 @@ fun HomeScreen(
             text = { OutlinedTextField(value = name, onValueChange = { newName = it }, placeholder = { Text("이름 (예: 아침 활동 동요)") }, singleLine = true) },
             confirmButton = { TextButton(onClick = { onCreatePlaylist(name); newName = null }) { Text("만들기") } },
             dismissButton = { TextButton(onClick = { newName = null }) { Text("취소") } },
-        )
-    }
-    if (showSettings) {
-        AlertDialog(
-            onDismissRequest = { showSettings = false },
-            title = { Text("설정") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(if (state.ytReady) "유튜브 엔진 준비됨" + (state.ytVersion?.let { " (yt-dlp $it)" } ?: "") else "유튜브 엔진 준비 중…", color = Muted, fontSize = 13.sp)
-                    Text("유튜브가 안 열리면 엔진을 업데이트해 보세요. 하루 한 번은 자동으로 합니다.", fontSize = 13.sp)
-                    Text("화면이 꺼지거나 다른 앱으로 가도 소리는 계속 재생됩니다. 알림에서 멈출 수 있습니다.", fontSize = 13.sp)
-                }
-            },
-            confirmButton = { TextButton(onClick = { onUpdateYt(); showSettings = false }, enabled = state.ytReady) { Text("엔진 업데이트") } },
-            dismissButton = { TextButton(onClick = { showSettings = false }) { Text("닫기") } },
         )
     }
 }
@@ -243,5 +241,45 @@ private fun EntryList(list: List<MediaEntry>, empty: String, onPlay: (MediaEntry
     if (list.isEmpty()) { Text(empty, color = Muted, fontSize = 14.sp, modifier = Modifier.padding(20.dp)); return }
     LazyColumn(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         items(list, key = { it.id }) { e -> EntryRow(e, onClick = { onPlay(e) }) { trailing(e) } }
+    }
+}
+
+/** 저장됨 탭: 저장 중인 작업(진행률·취소)과 저장된 파일(인터넷 없이 재생). */
+@Composable
+private fun SavedTab(saved: List<SavedFile>, jobs: List<RecordJob>, onPlay: (Int) -> Unit, onDelete: (SavedFile) -> Unit, onCancel: (String) -> Unit) {
+    var confirm by remember { mutableStateOf<SavedFile?>(null) }
+    if (saved.isEmpty() && jobs.isEmpty()) {
+        Text("재생 화면의 빨간 녹화 버튼으로 영상이나 소리를 저장하면 여기에 모입니다.\n저장한 파일은 인터넷 없이 재생됩니다.", color = Muted, fontSize = 14.sp, modifier = Modifier.padding(20.dp))
+        return
+    }
+    LazyColumn(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        items(jobs, key = { it.id }) { j ->
+            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Surface).padding(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(j.title, color = Ink, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text((if (j.audioOnly) "녹음" else "녹화") + " 저장 중" + if (j.progress > 0) " ${(j.progress * 100).toInt()}%" else "…", color = Muted, fontSize = 12.sp)
+                    }
+                    TextButton(onClick = { onCancel(j.id) }) { Text("취소", color = Accent) }
+                }
+                if (j.progress > 0) LinearProgressIndicator(progress = { j.progress }, modifier = Modifier.fillMaxWidth(), color = Accent, trackColor = Line)
+                else LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = Accent, trackColor = Line)
+            }
+        }
+        items(saved.size, key = { saved[it].file.name }) { i ->
+            val f = saved[i]
+            EntryRow(f.toEntry(), onClick = { onPlay(i) }, subtitle = (if (f.audioOnly) "소리" else "영상") + " · ${formatDuration(f.durationSec)} · ${f.sizeBytes / (1024 * 1024)}MB · 오프라인") {
+                SmallIcon(Icons.Default.Delete, "지우기") { confirm = f }
+            }
+        }
+    }
+    confirm?.let { f ->
+        AlertDialog(
+            onDismissRequest = { confirm = null },
+            title = { Text("파일 지우기") },
+            text = { Text("'${f.title}' 파일을 지울까요? 되돌릴 수 없습니다.") },
+            confirmButton = { TextButton(onClick = { onDelete(f); confirm = null }) { Text("지우기") } },
+            dismissButton = { TextButton(onClick = { confirm = null }) { Text("취소") } },
+        )
     }
 }

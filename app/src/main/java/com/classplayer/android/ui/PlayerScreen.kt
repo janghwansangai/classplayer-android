@@ -71,6 +71,9 @@ import androidx.media3.ui.PlayerView
 import com.classplayer.android.data.Playlist
 import com.classplayer.android.data.formatDuration
 import com.classplayer.android.player.UiState
+import com.classplayer.android.schedule.Scheduler
+import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.FiberManualRecord
 import com.classplayer.android.ui.theme.Accent
 import com.classplayer.android.ui.theme.Bg
 import com.classplayer.android.ui.theme.Ink
@@ -104,6 +107,13 @@ fun PlayerScreen(
     onCreatePlaylist: (String) -> Unit,
     onPlayQueueIndex: (Int) -> Unit,
     onVrSurface: (android.view.Surface?) -> Unit,
+    backgroundPlay: Boolean,
+    schedule: Scheduler.State,
+    onToggleBackground: () -> Unit,
+    onRecord: (audioOnly: Boolean, startMs: Long?, endMs: Long?) -> Unit,
+    onStopIn: (Int) -> Unit,
+    onStopAt: (Int, Int) -> Unit,
+    onCancelStop: () -> Unit,
 ) {
     var position by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
@@ -113,6 +123,8 @@ fun PlayerScreen(
     var dragValue by remember { mutableFloatStateOf(0f) }
     var showQueue by remember { mutableStateOf(false) }
     var showAdd by remember { mutableStateOf(false) }
+    var showRecord by remember { mutableStateOf(false) }
+    var showTimer by remember { mutableStateOf(false) }
 
     LaunchedEffect(player) {
         while (true) {
@@ -159,9 +171,10 @@ fun PlayerScreen(
     }
 
     Column(Modifier.fillMaxSize().background(Bg)) {
-        Row(Modifier.padding(start = 4.dp, end = 4.dp, top = 44.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(start = 4.dp, end = 4.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.Default.KeyboardArrowDown, "닫기", tint = Ink) }
             Text("${state.queueName} · ${state.queueIndex + 1} / ${state.queue.size}", color = Muted, fontSize = 13.sp, modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
+            IconButton(onClick = { showTimer = true }) { Icon(Icons.Default.Bedtime, "자동 종료 예약", tint = if (schedule.stopAt > 0) Accent else Ink) }
             IconButton(onClick = { showAdd = true }) { Icon(Icons.Default.PlaylistAdd, "재생목록에 추가", tint = Ink) }
             IconButton(onClick = { showQueue = true }) { Icon(Icons.Default.QueueMusic, "재생 큐", tint = Ink) }
         }
@@ -172,6 +185,7 @@ fun PlayerScreen(
                 Pill("소리만", state.audioOnly, onToggleAudioOnly, Icons.Default.Headphones)
             }
             Row(Modifier.align(Alignment.BottomEnd).padding(10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                RoundIconButton(Icons.Default.FiberManualRecord, "녹화·녹음", 44.dp, Bg.copy(alpha = 0.75f), Color(0xFFF87171)) { if (state.current != null) showRecord = true }
                 RoundIconButton(Icons.Default.Explore, "360도", 44.dp, if (state.is360) Accent else Bg.copy(alpha = 0.75f), if (state.is360) Bg else Ink, onToggle360)
                 RoundIconButton(Icons.Default.ScreenRotation, "가로로 보기", 44.dp, Bg.copy(alpha = 0.75f), Ink, onToggleLandscape)
             }
@@ -179,7 +193,11 @@ fun PlayerScreen(
 
         Column(Modifier.padding(horizontal = 24.dp, vertical = 12.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
             Text(state.current?.title ?: "", color = Ink, fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
-            Text(if (state.current?.isLink == true) "유튜브 · 화면을 꺼도 계속 재생됩니다" else "내 영상 · 화면을 꺼도 계속 재생됩니다", color = Muted, fontSize = 13.sp)
+            Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(if (state.current?.isLink == true) "유튜브" else "내 영상", color = Muted, fontSize = 13.sp)
+                Pill(if (backgroundPlay) "백그라운드 재생 켬" else "백그라운드 재생 끔", backgroundPlay, onToggleBackground, Icons.Default.Headphones)
+            }
+            if (schedule.stopAt > 0) Text("${formatWhen(schedule.stopAt)}에 자동 종료", color = Accent, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
         }
 
         Spacer(Modifier.weight(1f))
@@ -234,6 +252,17 @@ fun PlayerScreen(
         }
     }
 
+    if (showRecord) state.current?.let { cur ->
+        RecordDialog(cur, player, onDismiss = { showRecord = false }, onStart = onRecord)
+    }
+    if (showTimer) {
+        AlertDialog(
+            onDismissRequest = { showTimer = false },
+            title = { Text("자동 종료") },
+            text = { ScheduleControls(schedule, playlists, false, { onStopIn(it); showTimer = false }, { h, m -> onStopAt(h, m); showTimer = false }, { onCancelStop(); showTimer = false }, { _, _, _, _ -> }, {}, {}) },
+            confirmButton = { TextButton(onClick = { showTimer = false }) { Text("닫기") } },
+        )
+    }
     if (showQueue) {
         AlertDialog(
             onDismissRequest = { showQueue = false },

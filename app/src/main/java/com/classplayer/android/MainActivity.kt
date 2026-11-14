@@ -25,7 +25,18 @@ import com.classplayer.android.player.UiState
 import com.classplayer.android.ui.HomeScreen
 import com.classplayer.android.ui.PlayerScreen
 import com.classplayer.android.ui.PlaylistScreen
+import com.classplayer.android.ui.SettingsScreen
+import com.classplayer.android.ui.theme.Bg
 import com.classplayer.android.ui.theme.ClassPlayerTheme
+import com.classplayer.android.update.Updater
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.Modifier
 
 class MainActivity : ComponentActivity() {
     private val vm: PlayerViewModel by viewModels()
@@ -53,6 +64,12 @@ class MainActivity : ComponentActivity() {
                 val playlists by vm.library.playlists.collectAsState()
                 val favorites by vm.library.favorites.collectAsState()
                 val recents by vm.library.recents.collectAsState()
+                val saved by vm.savedFiles.collectAsState()
+                val jobs by vm.recordJobs.collectAsState()
+                val backgroundPlay by vm.settings.backgroundPlay.collectAsState()
+                val autoUpdate by vm.settings.autoUpdate.collectAsState()
+                val schedule by vm.schedule.collectAsState()
+                val update by vm.update.collectAsState()
                 val ctx = LocalContext.current
 
                 LaunchedEffect(state.status) {
@@ -65,14 +82,17 @@ class MainActivity : ComponentActivity() {
                     if (playing) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 }
 
+                // 가로 전체화면 재생만 화면 끝까지, 나머지는 상태바·내비게이션바·키보드를 피해서 그린다
+                val fullBleed = state.screen == UiState.Screen.Player && state.landscape
+                Box(Modifier.fillMaxSize().background(Bg).then(if (fullBleed) Modifier else Modifier.safeDrawingPadding())) {
                 when (state.screen) {
                     UiState.Screen.Home -> HomeScreen(
-                        state = state, playlists = playlists, favorites = favorites, recents = recents,
+                        state = state, playlists = playlists, favorites = favorites, recents = recents, saved = saved, jobs = jobs,
                         isPlaying = controller?.isPlaying == true,
                         onTab = vm::setHomeTab,
                         onPlayText = vm::openText,
                         onPickFile = { pickTargetPlaylist = null; pickFile.launch(arrayOf("video/*", "audio/*")) },
-                        onOpenPlaylist = { vm.openPlaylist(it.id) },
+                        onOpenPlaylist = { vm.openPlaylist(it.id); vm.prefetchPlaylist(it) },
                         onPlayPlaylist = { vm.playPlaylist(it) },
                         onCreatePlaylist = { vm.createPlaylist(it) },
                         onPlayEntry = vm::playEntry,
@@ -80,7 +100,10 @@ class MainActivity : ComponentActivity() {
                         onOpenPlayer = { if (state.current != null) vm.goPlayer() else vm.notify("재생 중인 영상이 없습니다") },
                         onTogglePlay = vm::togglePlay,
                         onNext = vm::next,
-                        onUpdateYt = vm::updateYtDlp,
+                        onOpenSettings = vm::goSettings,
+                        onPlaySaved = vm::playSaved,
+                        onDeleteSaved = vm::deleteSaved,
+                        onCancelJob = vm::cancelRecord,
                     )
                     UiState.Screen.Player -> {
                         BackHandler { if (state.landscape) vm.toggleLandscape() else vm.goHome() }
@@ -98,6 +121,14 @@ class MainActivity : ComponentActivity() {
                             onCreatePlaylist = { name -> vm.createPlaylist(name, open = false); vm.library.playlists.value.lastOrNull()?.let { vm.addCurrentToPlaylist(it.id) } },
                             onPlayQueueIndex = vm::playQueueIndex,
                             onVrSurface = vm::attachVrSurface,
+                            backgroundPlay = backgroundPlay,
+                            schedule = schedule,
+                            onToggleBackground = {
+                                vm.settings.setBackgroundPlay(!backgroundPlay)
+                                vm.notify(if (!backgroundPlay) "백그라운드 재생 켬: 화면을 꺼도 계속 재생" else "백그라운드 재생 끔: 앱을 나가면 멈춤")
+                            },
+                            onRecord = vm::startRecord,
+                            onStopIn = vm::stopIn, onStopAt = vm::stopAt, onCancelStop = vm::cancelStop,
                         )
                     }
                     UiState.Screen.PlaylistEdit -> {
@@ -115,6 +146,48 @@ class MainActivity : ComponentActivity() {
                             onPlayFrom = { vm.playPlaylist(vm.library.playlist(p.id) ?: p, it) },
                             onCycleRepeat = vm::cycleRepeat, onToggleShuffle = vm::toggleShuffle,
                         )
+                    }
+                    UiState.Screen.Settings -> {
+                        BackHandler { vm.goHome() }
+                        SettingsScreen(
+                            state = state, backgroundPlay = backgroundPlay, autoUpdate = autoUpdate,
+                            schedule = schedule, update = update, playlists = playlists,
+                            savedCount = saved.size, savedDir = vm.savedDir,
+                            onBack = vm::goHome,
+                            onBackgroundPlay = vm.settings::setBackgroundPlay,
+                            onAutoUpdate = vm.settings::setAutoUpdate,
+                            onStopIn = vm::stopIn, onStopAt = vm::stopAt, onCancelStop = vm::cancelStop,
+                            onStartAt = vm::startAt, onCancelStart = vm::cancelStart,
+                            onNeedPlaylist = { vm.notify("먼저 재생목록을 만들어 주세요") },
+                            onCheckUpdate = vm::checkUpdate,
+                            onDownloadUpdate = vm::downloadUpdate,
+                            onInstallUpdate = vm::installUpdate,
+                            onUpdateYt = vm::updateYtDlp,
+                            onOpenSaved = { vm.setHomeTab(UiState.HomeTab.Saved); vm.goHome() },
+                            onBugReport = { vm.openBugReport("설정") },
+                        )
+                    }
+                }
+                }
+
+                // 새 버전 안내: 와이파이에서 미리 받아 두었으면 설치를, 아니면 내려받기를 묻는다
+                if (!state.updateDialogDismissed && state.screen != UiState.Screen.Settings) {
+                    when (val u = update) {
+                        is Updater.State.Ready -> AlertDialog(
+                            onDismissRequest = vm::dismissUpdateDialog,
+                            title = { Text("새 버전 ${u.version} 준비됨") },
+                            text = { Text("설치를 누르면 안드로이드 설치 화면이 열립니다. 재생목록과 저장한 파일은 그대로 남습니다.") },
+                            confirmButton = { TextButton(onClick = { vm.dismissUpdateDialog(); vm.installUpdate() }) { Text("설치") } },
+                            dismissButton = { TextButton(onClick = vm::dismissUpdateDialog) { Text("나중에") } },
+                        )
+                        is Updater.State.Available -> AlertDialog(
+                            onDismissRequest = vm::dismissUpdateDialog,
+                            title = { Text("새 버전 ${u.version}이 있습니다") },
+                            text = { Text("${u.size / (1024 * 1024)}MB를 내려받습니다. 모바일 데이터라면 와이파이에서 받는 것을 권합니다.") },
+                            confirmButton = { TextButton(onClick = { vm.dismissUpdateDialog(); vm.downloadUpdate() }) { Text("내려받기") } },
+                            dismissButton = { TextButton(onClick = vm::dismissUpdateDialog) { Text("나중에") } },
+                        )
+                        else -> {}
                     }
                 }
             }
@@ -148,6 +221,7 @@ class MainActivity : ComponentActivity() {
         } else {
             c.show(WindowInsetsCompat.Type.systemBars())
             c.isAppearanceLightStatusBars = false
+            c.isAppearanceLightNavigationBars = false
         }
     }
 

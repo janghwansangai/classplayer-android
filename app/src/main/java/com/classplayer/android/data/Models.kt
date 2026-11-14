@@ -61,3 +61,26 @@ fun formatDuration(sec: Long): String {
     val h = sec / 3600; val m = (sec % 3600) / 60; val s = sec % 60
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
 }
+
+/**
+ * 재생용 MediaItem으로 바꾼다. 컨트롤러에서 보낼 때는 uri가 빠지므로 requestMetadata에도
+ * 주소를 넣고, 서비스 안에서 바로 쓸 때는 withUri=true로 uri도 채운다.
+ */
+fun MediaEntry.toMediaItem(queueName: String, withUri: Boolean = false): androidx.media3.common.MediaItem {
+    val uri = android.net.Uri.parse(source)
+    return androidx.media3.common.MediaItem.Builder()
+        .setMediaId(id)
+        .apply { if (withUri) setUri(uri) }
+        .setMediaMetadata(
+            androidx.media3.common.MediaMetadata.Builder()
+                .setTitle(title).setArtist(queueName)
+                .setArtworkUri(thumbnail?.let(android.net.Uri::parse))
+                .build(),
+        )
+        .setRequestMetadata(androidx.media3.common.MediaItem.RequestMetadata.Builder().setMediaUri(uri).build())
+        .build()
+}
+
+/** 소리 파일인지(썸네일 아이콘 구분용). */
+val MediaEntry.isAudioFile: Boolean
+    get() = !isLink && source.substringAfterLast('.', "").lowercase() in setOf("m4a", "mp3", "aac", "opus", "ogg", "wav", "flac")

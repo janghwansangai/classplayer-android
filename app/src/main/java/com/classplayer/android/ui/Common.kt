@@ -1,6 +1,7 @@
 package com.classplayer.android.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,6 +39,8 @@ import coil.decode.VideoFrameDecoder
 import coil.request.ImageRequest
 import com.classplayer.android.data.MediaEntry
 import com.classplayer.android.data.formatDuration
+import com.classplayer.android.data.isAudioFile
+import androidx.compose.material.icons.filled.MusicNote
 import com.classplayer.android.ui.theme.CoverColors
 import com.classplayer.android.ui.theme.Ink
 import com.classplayer.android.ui.theme.Muted
@@ -49,8 +52,8 @@ fun Thumb(entry: MediaEntry, modifier: Modifier = Modifier, radius: Dp = 10.dp) 
     val ctx = LocalContext.current
     val model = if (entry.isLink) entry.thumbnail else entry.source
     Box(modifier.clip(RoundedCornerShape(radius)).background(CoverColors[entry.source.hashCode().mod(CoverColors.size)]), contentAlignment = Alignment.Center) {
-        Icon(if (entry.isLink) Icons.Default.PlayArrow else Icons.Default.VideoFile, null, tint = Ink.copy(alpha = 0.6f), modifier = Modifier.size(26.dp))
-        if (model != null) {
+        Icon(if (entry.isLink) Icons.Default.PlayArrow else if (entry.isAudioFile) Icons.Default.MusicNote else Icons.Default.VideoFile, null, tint = Ink.copy(alpha = 0.6f), modifier = Modifier.size(26.dp))
+        if (model != null && !entry.isAudioFile) {
             AsyncImage(
                 model = ImageRequest.Builder(ctx).data(model).crossfade(true)
                     .apply { if (!entry.isLink) decoderFactory(VideoFrameDecoder.Factory()) }
@@ -102,11 +105,12 @@ fun Pill(text: String, active: Boolean, onClick: () -> Unit, icon: ImageVector? 
     Row(
         Modifier.height(40.dp).clip(RoundedCornerShape(20.dp))
             .background(if (active) com.classplayer.android.ui.theme.Accent else Surface)
+            .then(if (active) Modifier else Modifier.border(1.dp, com.classplayer.android.ui.theme.Line, RoundedCornerShape(20.dp)))
             .clickable(onClick = onClick).padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (icon != null) { Icon(icon, null, tint = if (active) com.classplayer.android.ui.theme.Bg else Ink, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)) }
-        Text(text, fontSize = 13.sp, fontWeight = if (active) FontWeight.Bold else FontWeight.Medium, color = if (active) com.classplayer.android.ui.theme.Bg else Ink)
+        Text(text, fontSize = 13.sp, maxLines = 1, softWrap = false, fontWeight = if (active) FontWeight.Bold else FontWeight.Medium, color = if (active) com.classplayer.android.ui.theme.Bg else Ink)
     }
 }
 

@@ -87,7 +87,7 @@ fun PlaylistScreen(
     var dragOffset by remember { mutableFloatStateOf(0f) }
 
     Column(Modifier.fillMaxSize().background(Bg)) {
-        Row(Modifier.padding(start = 4.dp, end = 12.dp, top = 44.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(start = 4.dp, end = 12.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { onRename(name); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "뒤로", tint = Ink) }
             Text("재생목록 편집", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
             Pill("완료", true, { onRename(name); onBack() })

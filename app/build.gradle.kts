@@ -12,8 +12,8 @@ android {
         applicationId = "com.classplayer.android"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
         // youtubedl-android(파이썬 포팅)는 arm64와 x86_64 네이티브 라이브러리만 제공한다
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
@@ -31,7 +31,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
     packaging {
         // youtubedl-android가 네이티브 라이브러리를 파일로 꺼내 쓰므로 압축 해제 패키징이 필요하다
         jniLibs { useLegacyPackaging = true }
@@ -54,6 +54,7 @@ dependencies {
     implementation(libs.media3.exoplayer.hls)
     implementation(libs.media3.session)
     implementation(libs.media3.ui)
+    implementation(libs.media3.transformer)
     implementation(libs.youtubedl.library)
     implementation(libs.youtubedl.ffmpeg)
     implementation(libs.kotlinx.coroutines.android)

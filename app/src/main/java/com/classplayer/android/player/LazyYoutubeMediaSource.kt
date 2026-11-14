@@ -80,7 +80,9 @@ class LazyYoutubeMediaSource(
     }
 
     override fun onChildSourceInfoRefreshed(childSourceId: Unit, mediaSource: MediaSource, newTimeline: Timeline) {
-        refreshSourceInfo(newTimeline)
+        // 실제 스트림 주소의 MediaItem 대신 원래 항목(제목·썸네일·id)을 보이게 한다.
+        // 안 그러면 알림과 화면에 제목이 빠지고 재생 큐 동기화가 어긋난다.
+        refreshSourceInfo(androidx.media3.exoplayer.source.TimelineWithUpdatedMediaItem(newTimeline, item))
     }
 
     override fun maybeThrowSourceInfoRefreshError() {
