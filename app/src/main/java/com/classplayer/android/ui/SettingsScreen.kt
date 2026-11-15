@@ -22,6 +22,8 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -65,7 +67,19 @@ fun SettingsScreen(
     onUpdateYt: () -> Unit,
     onOpenSaved: () -> Unit,
     onBugReport: () -> Unit,
+    videoLocked: Boolean = false,
+    hasLockPassword: Boolean = false,
+    onLockVideo: () -> Boolean = { false },
+    onUnlockVideo: (String) -> Boolean = { false },
+    onSetLockPassword: (String?, String, String) -> String? = { _, _, _ -> null },
+    onRemoveLockPassword: (String) -> Boolean = { false },
 ) {
+    var dialog by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
+    when (dialog) {
+        "set" -> PasswordSetDialog(hasLockPassword, { dialog = null }, onSetLockPassword)
+        "unlock" -> PasswordAskDialog("영상 잠금 풀기", "비밀번호를 넣으면 영상이 보입니다.", "풀기", { dialog = null }, onUnlockVideo)
+        "remove" -> PasswordAskDialog("영상 잠금 없애기", "비밀번호를 지우면 잠금 기능이 꺼집니다.", "지우기", { dialog = null }, onRemoveLockPassword)
+    }
     Column(Modifier.fillMaxSize().background(Bg)) {
         Row(Modifier.padding(start = 4.dp, end = 12.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "뒤로", tint = Ink) }
@@ -74,6 +88,24 @@ fun SettingsScreen(
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Card("재생") {
                 SwitchRow("백그라운드 재생", "화면이 꺼지거나 다른 앱으로 가도 소리를 계속 재생합니다. 알림에서 멈출 수 있어요.", backgroundPlay, onBackgroundPlay)
+            }
+            Card("영상 잠금") {
+                Text(
+                    when {
+                        !hasLockPassword -> "비밀번호를 정하면 영상을 잠글 수 있습니다. 잠기면 소리만 나오고, 비밀번호를 넣어야 영상이 보입니다."
+                        videoLocked -> "잠김 · 소리만 나옵니다"
+                        else -> "풀림 · 영상이 보입니다. 재생 화면 위쪽 자물쇠로도 잠글 수 있어요."
+                    }, color = if (videoLocked) Accent else Muted, fontSize = 13.sp,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (hasLockPassword) {
+                        if (videoLocked) Pill("잠금 풀기", true, { dialog = "unlock" }) else Pill("지금 잠그기", true, { onLockVideo() })
+                        Pill("비밀번호 바꾸기", false, { dialog = "set" })
+                    } else {
+                        Pill("비밀번호 정하기", true, { dialog = "set" })
+                    }
+                }
+                if (hasLockPassword) Row { Pill("잠금 없애기", false, { dialog = "remove" }) }
             }
             Card("예약") {
                 ScheduleControls(schedule, playlists, true, onStopIn, onStopAt, onCancelStop, onStartAt, onCancelStart, onNeedPlaylist)

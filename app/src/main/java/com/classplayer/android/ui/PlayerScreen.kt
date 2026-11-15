@@ -72,6 +72,8 @@ import com.classplayer.android.data.Playlist
 import com.classplayer.android.data.formatDuration
 import com.classplayer.android.player.UiState
 import com.classplayer.android.schedule.Scheduler
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.FiberManualRecord
 import com.classplayer.android.ui.theme.Accent
@@ -114,6 +116,11 @@ fun PlayerScreen(
     onStopIn: (Int) -> Unit,
     onStopAt: (Int, Int) -> Unit,
     onCancelStop: () -> Unit,
+    videoLocked: Boolean = false,
+    hasLockPassword: Boolean = false,
+    onLockVideo: () -> Boolean = { false },
+    onUnlockVideo: (String) -> Boolean = { false },
+    onSetLockPassword: (String?, String, String) -> String? = { _, _, _ -> null },
 ) {
     var position by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
@@ -125,6 +132,8 @@ fun PlayerScreen(
     var showAdd by remember { mutableStateOf(false) }
     var showRecord by remember { mutableStateOf(false) }
     var showTimer by remember { mutableStateOf(false) }
+    var showUnlock by remember { mutableStateOf(false) }
+    var showSetPw by remember { mutableStateOf(false) }
 
     LaunchedEffect(player) {
         while (true) {
@@ -139,7 +148,16 @@ fun PlayerScreen(
 
     val video: @Composable (Modifier) -> Unit = { m ->
         Box(m.background(Color.Black)) {
-            if (state.audioOnly) {
+            if (videoLocked) {
+                // 영상 잠금: 화면은 가리고 소리만 나온다. 비밀번호로 풀어야 영상이 보인다
+                Column(Modifier.align(Alignment.Center).padding(bottom = 48.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Default.Lock, null, tint = Ink, modifier = Modifier.size(40.dp))
+                    Spacer(Modifier.height(6.dp))
+                    Text("영상 잠김 · 소리만 재생 중", color = Ink, fontSize = 14.sp)
+                    Spacer(Modifier.height(10.dp))
+                    Pill("잠금 풀기", true, { showUnlock = true }, Icons.Default.LockOpen)
+                }
+            } else if (state.audioOnly) {
                 Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
                     state.current?.let { Thumb(it, Modifier.size(width = 160.dp, height = 100.dp), radius = 12.dp) }
                     Spacer(Modifier.height(8.dp))
@@ -174,6 +192,11 @@ fun PlayerScreen(
         Row(Modifier.padding(start = 4.dp, end = 4.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.Default.KeyboardArrowDown, "닫기", tint = Ink) }
             Text("${state.queueName} · ${state.queueIndex + 1} / ${state.queue.size}", color = Muted, fontSize = 13.sp, modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
+            IconButton(onClick = {
+                if (videoLocked) showUnlock = true
+                else if (!hasLockPassword) showSetPw = true
+                else onLockVideo()
+            }) { Icon(if (videoLocked) Icons.Default.Lock else Icons.Default.LockOpen, if (videoLocked) "영상 잠금 풀기" else "영상 잠그기", tint = if (videoLocked) Accent else Ink) }
             IconButton(onClick = { showTimer = true }) { Icon(Icons.Default.Bedtime, "자동 종료 예약", tint = if (schedule.stopAt > 0) Accent else Ink) }
             IconButton(onClick = { showAdd = true }) { Icon(Icons.Default.PlaylistAdd, "재생목록에 추가", tint = Ink) }
             IconButton(onClick = { showQueue = true }) { Icon(Icons.Default.QueueMusic, "재생 큐", tint = Ink) }
@@ -252,6 +275,12 @@ fun PlayerScreen(
         }
     }
 
+    if (showUnlock) {
+        PasswordAskDialog("영상 잠금 풀기", "비밀번호를 넣으면 영상이 보입니다.", "풀기", { showUnlock = false }, onUnlockVideo)
+    }
+    if (showSetPw) {
+        PasswordSetDialog(false, { showSetPw = false }) { c, n, f -> onSetLockPassword(c, n, f).also { if (it == null) onLockVideo() } }
+    }
     if (showRecord) state.current?.let { cur ->
         RecordDialog(cur, player, onDismiss = { showRecord = false }, onStart = onRecord)
     }

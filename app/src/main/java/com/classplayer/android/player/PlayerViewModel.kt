@@ -282,6 +282,44 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     fun toggle360() = _state.update { it.copy(is360 = !it.is360) }
 
     /** 소리만 재생: 영상 트랙을 끄면 디코더가 쉬어서 배터리를 아낀다. */
+    // ---- 영상 잠금 ----
+    /** 잠그기: 비밀번호가 없으면 false(먼저 정해야 함). */
+    fun lockVideo(): Boolean {
+        if (!settings.hasLockPassword.value) return false
+        settings.setVideoLocked(true)
+        _controller.value?.let { applyVideoEnabled(it) }
+        notify("영상을 잠갔습니다. 소리만 나옵니다.")
+        return true
+    }
+
+    /** 풀기: 비밀번호가 맞으면 true. */
+    fun unlockVideo(pw: String): Boolean {
+        if (!settings.checkPassword(pw)) return false
+        settings.setVideoLocked(false)
+        _controller.value?.let { applyVideoEnabled(it) }
+        notify("영상 잠금을 풀었습니다")
+        return true
+    }
+
+    /** 비밀번호 정하기/바꾸기. 이미 있으면 현재 비밀번호가 맞아야 한다. 오류 문구를 돌려준다(성공이면 null). */
+    fun setLockPassword(current: String?, new: String, confirm: String): String? {
+        if (settings.hasLockPassword.value && !settings.checkPassword(current ?: "")) return "현재 비밀번호가 틀렸습니다"
+        if (new.length < 4) return "비밀번호는 4자 이상으로 해 주세요"
+        if (new != confirm) return "새 비밀번호가 서로 다릅니다"
+        settings.setPassword(new)
+        notify("영상 잠금 비밀번호를 정했습니다")
+        return null
+    }
+
+    /** 비밀번호 지우기(잠금도 풀림). */
+    fun removeLockPassword(current: String): Boolean {
+        if (!settings.checkPassword(current)) return false
+        settings.clearPassword()
+        _controller.value?.let { applyVideoEnabled(it) }
+        notify("영상 잠금을 없앴습니다")
+        return true
+    }
+
     fun toggleAudioOnly() {
         val next = !_state.value.audioOnly
         _state.update { it.copy(audioOnly = next) }
@@ -290,7 +328,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun applyVideoEnabled(c: MediaController) {
-        val disabled = _state.value.audioOnly || inBackground
+        val disabled = _state.value.audioOnly || inBackground || settings.videoLocked.value
         c.trackSelectionParameters = c.trackSelectionParameters.buildUpon()
             .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, disabled)
             .build()

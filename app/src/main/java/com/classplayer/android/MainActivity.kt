@@ -71,6 +71,8 @@ class MainActivity : ComponentActivity() {
                 val autoUpdate by vm.settings.autoUpdate.collectAsState()
                 val schedule by vm.schedule.collectAsState()
                 val update by vm.update.collectAsState()
+                val videoLocked by vm.settings.videoLocked.collectAsState()
+                val hasLockPassword by vm.settings.hasLockPassword.collectAsState()
                 val ctx = LocalContext.current
 
                 LaunchedEffect(state.status) {
@@ -130,6 +132,8 @@ class MainActivity : ComponentActivity() {
                             },
                             onRecord = vm::startRecord,
                             onStopIn = vm::stopIn, onStopAt = vm::stopAt, onCancelStop = vm::cancelStop,
+                            videoLocked = videoLocked, hasLockPassword = hasLockPassword,
+                            onLockVideo = vm::lockVideo, onUnlockVideo = vm::unlockVideo, onSetLockPassword = vm::setLockPassword,
                         )
                     }
                     UiState.Screen.PlaylistEdit -> {
@@ -177,6 +181,9 @@ class MainActivity : ComponentActivity() {
                             onUpdateYt = vm::updateYtDlp,
                             onOpenSaved = { vm.setHomeTab(UiState.HomeTab.Saved); vm.goHome() },
                             onBugReport = { vm.openBugReport("설정") },
+                            videoLocked = videoLocked, hasLockPassword = hasLockPassword,
+                            onLockVideo = vm::lockVideo, onUnlockVideo = vm::unlockVideo,
+                            onSetLockPassword = vm::setLockPassword, onRemoveLockPassword = vm::removeLockPassword,
                         )
                     }
                 }
