@@ -12,8 +12,8 @@ android {
         applicationId = "com.classplayer.android"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.5.0"
+        versionCode = 6
+        versionName = "0.6.0"
         // youtubedl-android(파이썬 포팅)는 arm64와 x86_64 네이티브 라이브러리만 제공한다
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }

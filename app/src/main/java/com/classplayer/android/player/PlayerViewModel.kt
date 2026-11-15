@@ -462,6 +462,33 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     fun installUpdate() { if (!Updater.install(ctx)) notify("'이 출처의 앱 허용'을 켠 뒤 다시 눌러 주세요") }
     fun dismissUpdateDialog() = _state.update { it.copy(updateDialogDismissed = true) }
 
+    // ---- 다른 폰에 설치 링크 보내기 ----
+    /** 카카오톡·문자 등으로 보낼 설치 안내 글(항상 최신 APK를 받는 링크). */
+    val installMessage: String
+        get() = "수업용 영상 플레이어 '클래스플레이어' (안드로이드)\n" +
+            "광고 없이 유튜브 영상만, 재생목록·360도·녹화 기능이 있어요.\n\n" +
+            "1. 아래 링크를 눌러 앱 파일을 받으세요(약 120MB, 와이파이 권장).\n" +
+            "2. 받은 파일을 열고, 처음 한 번 '출처를 알 수 없는 앱 설치'를 허용한 뒤 설치하세요.\n" +
+            "3. 카카오톡에서 안 받아지면 링크를 길게 눌러 크롬으로 여세요.\n\n" + INSTALL_URL
+
+    fun shareApp() {
+        val send = Intent(Intent.ACTION_SEND).setType("text/plain")
+            .putExtra(Intent.EXTRA_SUBJECT, "클래스플레이어 설치 링크")
+            .putExtra(Intent.EXTRA_TEXT, installMessage)
+        runCatching {
+            val chooser = Intent.createChooser(send, "설치 링크 보내기")
+                // 공유 목록에 클래스플레이어 자신은 빼기
+                .putExtra(Intent.EXTRA_EXCLUDE_COMPONENTS, arrayOf(ComponentName(ctx, com.classplayer.android.MainActivity::class.java)))
+            ctx.startActivity(chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }.onFailure { notify("공유 창을 열 수 없습니다") }
+    }
+
+    fun copyInstallLink() {
+        val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        cm.setPrimaryClip(android.content.ClipData.newPlainText("클래스플레이어 설치 링크", installMessage))
+        notify("설치 안내와 링크를 복사했습니다")
+    }
+
     // ---- 오류 신고 ----
     /** 오류 취합 센터(구글 앱스 스크립트) 신고 화면을 기본 브라우저로 연다. 개인정보는 보내지 않는다. */
     fun openBugReport(where: String) {
@@ -551,6 +578,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     companion object {
+        /** 깃허브 최신 릴리스의 APK(새 버전을 올리면 같은 링크로 최신판이 받아진다) */
+        const val INSTALL_URL = "https://github.com/janghwansangai/classplayer-android/releases/latest/download/app-release.apk"
         private const val BUG_REPORT_URL =
             "https://script.google.com/macros/s/AKfycbxsRD7vRlEP9oKlvlDDPww8cYaDadTTIp1KrqYWSVU5qE5_gUh3bNUskBhHDlXH6FskvA/exec"
     }

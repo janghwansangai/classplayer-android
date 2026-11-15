@@ -14,6 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -73,6 +74,8 @@ fun SettingsScreen(
     onUnlockVideo: (String) -> Boolean = { false },
     onSetLockPassword: (String?, String, String) -> String? = { _, _, _ -> null },
     onRemoveLockPassword: (String) -> Boolean = { false },
+    onShareApp: () -> Unit = {},
+    onCopyInstallLink: () -> Unit = {},
 ) {
     var dialog by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
     when (dialog) {
@@ -114,6 +117,13 @@ fun SettingsScreen(
                 Text("$savedCount 개 · 앱 다운로드 폴더", color = Ink, fontSize = 14.sp)
                 Text(savedDir, color = Muted, fontSize = 12.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { Pill("저장됨 목록 열기", false, onOpenSaved) }
+            }
+            Card("다른 폰에 설치하기") {
+                Text("카카오톡·문자 등으로 설치 링크를 보내면, 받은 사람이 눌러서 바로 받을 수 있어요. 링크는 항상 최신 버전을 받습니다.", color = Muted, fontSize = 13.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Pill("설치 링크 보내기", true, onShareApp, androidx.compose.material.icons.Icons.Default.Share)
+                    Pill("링크 복사", false, onCopyInstallLink)
+                }
             }
             Card("업데이트") {
                 Text("지금 버전 ${Updater.currentVersion}", color = Ink, fontSize = 14.sp)

@@ -184,6 +184,7 @@ class MainActivity : ComponentActivity() {
                             videoLocked = videoLocked, hasLockPassword = hasLockPassword,
                             onLockVideo = vm::lockVideo, onUnlockVideo = vm::unlockVideo,
                             onSetLockPassword = vm::setLockPassword, onRemoveLockPassword = vm::removeLockPassword,
+                            onShareApp = vm::shareApp, onCopyInstallLink = vm::copyInstallLink,
                         )
                     }
                 }
