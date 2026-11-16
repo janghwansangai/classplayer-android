@@ -123,6 +123,7 @@ fun PlayerScreen(
     onLockVideo: () -> Boolean = { false },
     onUnlockVideo: (String) -> String? = { null },
     onSetLockPassword: (String?, String, String) -> String? = { _, _, _ -> null },
+    offline: Boolean = false, // 지금 곡을 미리 받아 둔 파일로 재생 중인지
 ) {
     var position by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
@@ -220,7 +221,7 @@ fun PlayerScreen(
         Column(Modifier.padding(horizontal = 24.dp, vertical = 12.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
             Text(state.current?.title ?: "", color = Ink, fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
             Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(if (state.current?.isLink == true) "유튜브" else "내 영상", color = Muted, fontSize = 13.sp)
+                Text(if (offline) "유튜브 · 받아 둔 파일" else if (state.current?.isLink == true) "유튜브" else "내 영상", color = Muted, fontSize = 13.sp)
                 Pill(if (backgroundPlay) "백그라운드 재생 켬" else "백그라운드 재생 끔", backgroundPlay, onToggleBackground, Icons.Default.Headphones)
             }
             if (schedule.stopAt > 0) Text("${formatWhen(schedule.stopAt)}에 자동 종료", color = Accent, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))

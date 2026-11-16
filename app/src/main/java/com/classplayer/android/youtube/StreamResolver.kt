@@ -113,7 +113,7 @@ object StreamResolver {
     /** 다음 곡을 미리 풀어 둔다. 실패해도 조용히 넘어간다. */
     fun prefetch(context: Context, url: String) {
         loadDisk(context.applicationContext)
-        if (!isYoutubeUrl(url) || isCached(url)) return
+        if (!isYoutubeUrl(url) || isCached(url) || com.classplayer.android.offline.Offline.fileFor(url) != null) return
         scope.launch { runCatching { resolve(context, url) } }
     }
 

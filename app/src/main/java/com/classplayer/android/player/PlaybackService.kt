@@ -28,6 +28,7 @@ import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.classplayer.android.ClassPlayerApp
+import com.classplayer.android.offline.Offline
 import com.classplayer.android.youtube.StreamResolver
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
@@ -252,6 +253,10 @@ class ClassMediaSourceFactory(private val context: Context) : MediaSource.Factor
     override fun createMediaSource(mediaItem: MediaItem): MediaSource {
         val uri = mediaItem.localConfiguration?.uri?.toString() ?: return default.createMediaSource(mediaItem)
         if (StreamResolver.isYoutubeUrl(uri)) {
+            // 미리 받아 둔 파일이 있으면 그걸 튼다(yt-dlp 해석·로딩 없이 바로, 인터넷 없이도)
+            Offline.fileFor(uri)?.let { f ->
+                return default.createMediaSource(mediaItem.buildUpon().setUri(android.net.Uri.fromFile(f)).build())
+            }
             val app = context.applicationContext as ClassPlayerApp
             return LazyYoutubeMediaSource(context, mediaItem, uri) { title, dur ->
                 app.library.updateMeta(uri, title, dur.takeIf { it > 0 }, null)

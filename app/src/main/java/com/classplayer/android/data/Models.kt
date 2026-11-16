@@ -38,11 +38,17 @@ data class Playlist(
     val name: String,
     val items: List<MediaEntry> = emptyList(),
     val colorIndex: Int = 0, // 커버 색(썸네일이 없을 때)
+    val autoDownload: Boolean = false, // 미리 받기: 켜면 유튜브 영상을 차례로 내려받아 둔다
+    val syncUrl: String? = null,       // 연결한 유튜브 재생목록(일부 공개). 새로 저장한 영상을 자동으로 가져온다
+    val syncedAt: Long = 0L,           // 마지막으로 연결한 재생목록을 확인한 시각
+    val syncError: String? = null,     // 마지막 확인이 실패했으면 그 이유
 ) {
     val durationSec: Long get() = items.sumOf { it.durationSec }
 
     fun toJson(): JSONObject = JSONObject()
         .put("id", id).put("name", name).put("colorIndex", colorIndex)
+        .put("autoDownload", autoDownload).put("syncUrl", syncUrl ?: JSONObject.NULL)
+        .put("syncedAt", syncedAt).put("syncError", syncError ?: JSONObject.NULL)
         .put("items", JSONArray().apply { items.forEach { put(it.toJson()) } })
 
     companion object {
@@ -52,6 +58,10 @@ data class Playlist(
                 id = o.optString("id", UUID.randomUUID().toString()),
                 name = o.optString("name", "재생목록"),
                 colorIndex = o.optInt("colorIndex", 0),
+                autoDownload = o.optBoolean("autoDownload", false),
+                syncUrl = o.optString("syncUrl").takeIf { it.isNotEmpty() && !o.isNull("syncUrl") },
+                syncedAt = o.optLong("syncedAt", 0L),
+                syncError = o.optString("syncError").takeIf { it.isNotEmpty() && !o.isNull("syncError") },
                 // 항목 하나가 깨져도 재생목록 전체를 잃지 않게 그 항목만 건너뛴다
                 items = (0 until arr.length()).mapNotNull { runCatching { MediaEntry.fromJson(arr.getJSONObject(it)) }.getOrNull() },
             )

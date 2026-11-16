@@ -18,6 +18,17 @@ class AppSettings(context: Context) {
     val autoUpdate: StateFlow<Boolean> = _autoUpdate
     fun setAutoUpdate(on: Boolean) { _autoUpdate.value = on; prefs.edit().putBoolean("autoUpdate", on).apply() }
 
+    // ---- 미리 받기 ----
+    /** 와이파이(요금이 안 나가는 연결)에서만 받을지. 기본 켜짐. */
+    private val _offlineWifiOnly = MutableStateFlow(prefs.getBoolean("offlineWifiOnly", true))
+    val offlineWifiOnly: StateFlow<Boolean> = _offlineWifiOnly
+    fun setOfflineWifiOnly(on: Boolean) { _offlineWifiOnly.value = on; prefs.edit().putBoolean("offlineWifiOnly", on).apply() }
+
+    /** 받을 화질(세로 픽셀). 720이면 10분에 약 100MB, 1080이면 그 두 배쯤. */
+    private val _offlineQuality = MutableStateFlow(prefs.getInt("offlineQuality", 720))
+    val offlineQuality: StateFlow<Int> = _offlineQuality
+    fun setOfflineQuality(h: Int) { _offlineQuality.value = h; prefs.edit().putInt("offlineQuality", h).apply() }
+
     // ---- 영상 잠금: 비밀번호를 넣어야 화면(영상)이 보인다. 잠겨 있으면 소리만 나온다 ----
     // 비밀번호는 그대로 저장하지 않고 소금(salt)을 섞은 SHA-256 해시만 저장한다.
     private val _hasLockPassword = MutableStateFlow(prefs.contains("lockHash"))

@@ -52,7 +52,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
+import com.classplayer.android.data.MediaEntry
 import com.classplayer.android.data.Playlist
+import com.classplayer.android.offline.Offline
+import com.classplayer.android.youtube.StreamResolver
+import com.classplayer.android.youtube.YoutubeMeta
+import androidx.compose.material.icons.filled.DownloadForOffline
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.ui.graphics.Color
 import com.classplayer.android.data.formatDuration
 import com.classplayer.android.ui.theme.Accent
 import com.classplayer.android.ui.theme.Bg
@@ -79,8 +88,16 @@ fun PlaylistScreen(
     onPlayFrom: (Int) -> Unit,
     onCycleRepeat: () -> Unit,
     onToggleShuffle: () -> Unit,
+    offline: PlaylistOffline = PlaylistOffline(),
+    onSetAutoDownload: (on: Boolean, deleteFiles: Boolean) -> Unit = { _, _ -> },
+    onLinkPlaylist: (String) -> Unit = {},
+    onUnlink: () -> Unit = {},
+    onSyncNow: () -> Unit = {},
+    onRetryOffline: () -> Unit = {},
 ) {
     var link by rememberSaveable { mutableStateOf("") }
+    var askLink by remember { mutableStateOf<String?>(null) } // 유튜브 재생목록 링크: 계속 연결할지 한 번만 넣을지
+    var askOff by remember { mutableStateOf(false) }         // 미리 받기 끌 때 받은 파일을 지울지
     var name by rememberSaveable(playlist.id) { mutableStateOf(playlist.name) }
     var confirmDelete by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
@@ -121,10 +138,24 @@ fun PlaylistScreen(
                 colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Accent, unfocusedBorderColor = Line, focusedContainerColor = Surface, unfocusedContainerColor = Surface),
                 trailingIcon = { TextButton(onClick = { clipboard.getText()?.text?.let { link = it } }) { Text("붙여넣기", fontSize = 12.sp, color = Accent) } },
             )
-            Pill("추가", true, { if (link.isNotBlank()) { onAddLink(link); link = "" } })
+            Pill("추가", true, {
+                if (link.isNotBlank()) {
+                    if (isYoutubePlaylistLink(link)) askLink = link else onAddLink(link)
+                    link = ""
+                }
+            })
             RoundIconButton(Icons.Default.FolderOpen, "내 영상에서 추가", 48.dp, Surface, Ink, onAddFile)
         }
         if (!ytReady) Text("유튜브 재생목록 링크는 엔진 준비 후 가져올 수 있어요.", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
+
+        OfflineCard(
+            playlist, offline,
+            onToggle = { on ->
+                val have = playlist.items.count { e -> Offline.idOf(e.source)?.let { it in offline.downloaded } == true }
+                if (on || have == 0) onSetAutoDownload(on, false) else askOff = true
+            },
+            onSyncNow = onSyncNow, onUnlink = onUnlink, onRetry = onRetryOffline,
+        )
 
         Text("길게 눌러 끌면 순서가 바뀝니다", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
 
@@ -152,7 +183,7 @@ fun PlaylistScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(Icons.Default.DragHandle, null, tint = Muted, modifier = Modifier.width(32.dp))
-                    EntryRow(e, Modifier.weight(1f), onClick = { onPlayFrom(i) }, subtitle = "${i + 1}. ${if (e.isLink) "유튜브" else "내 영상"} · ${formatDuration(e.durationSec)}") {
+                    EntryRow(e, Modifier.weight(1f), onClick = { onPlayFrom(i) }, subtitle = "${i + 1}. ${if (e.isLink) "유튜브" else "내 영상"} · ${formatDuration(e.durationSec)}" + (offlineStatus(e, playlist, offline)?.let { " · $it" } ?: "")) {
                         SmallIcon(Icons.Default.Close, "삭제") { onRemove(e.id) }
                     }
                 }
@@ -176,6 +207,29 @@ fun PlaylistScreen(
         }
     }
 
+    askLink?.let { url ->
+        AlertDialog(
+            onDismissRequest = { askLink = null; link = url },
+            title = { Text("유튜브 재생목록") },
+            text = {
+                Text(
+                    "계속 연결하면 유튜브에서 이 재생목록에 새로 저장한 영상이 여기에 자동으로 추가됩니다(앱을 열 때와 6시간마다 확인).\n\n" +
+                        "유튜브 재생목록은 '공개'나 '일부 공개'여야 합니다. 좋아요 목록은 로그인이 필요해 연결할 수 없어요.",
+                )
+            },
+            confirmButton = { TextButton(onClick = { askLink = null; onLinkPlaylist(url) }) { Text("계속 연결") } },
+            dismissButton = { TextButton(onClick = { askLink = null; onAddLink(url) }) { Text("한 번만 추가") } },
+        )
+    }
+    if (askOff) {
+        AlertDialog(
+            onDismissRequest = { askOff = false },
+            title = { Text("미리 받기 끄기") },
+            text = { Text("이미 받은 영상 파일은 어떻게 할까요? 남겨 두면 인터넷 없이 계속 바로 재생됩니다.") },
+            confirmButton = { TextButton(onClick = { askOff = false; onSetAutoDownload(false, false) }) { Text("남겨 두기") } },
+            dismissButton = { TextButton(onClick = { askOff = false; onSetAutoDownload(false, true) }) { Text("파일 지우기") } },
+        )
+    }
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
@@ -184,5 +238,100 @@ fun PlaylistScreen(
             confirmButton = { TextButton(onClick = { confirmDelete = false; onDelete() }) { Text("삭제") } },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("취소") } },
         )
+    }
+}
+
+/** 재생목록 화면에 보일 미리 받기 상태. */
+data class PlaylistOffline(
+    val downloaded: Set<String> = emptySet(),
+    val progress: Offline.Progress? = null,
+    val failed: Map<String, Offline.Failure> = emptyMap(),
+    val notice: String? = null,
+    val wifiOnly: Boolean = true,
+)
+
+private val Warn = Color(0xFFF87171)
+
+private fun isYoutubePlaylistLink(text: String): Boolean {
+    val url = StreamResolver.extractUrl(text) ?: return false
+    return StreamResolver.isYoutubeUrl(url) && YoutubeMeta.playlistId(url) != null && YoutubeMeta.videoId(url) == null
+}
+
+/** 항목 옆에 붙일 받기 상태(유튜브가 아니거나 해당 없으면 null). */
+private fun offlineStatus(e: MediaEntry, p: Playlist, o: PlaylistOffline): String? {
+    val id = Offline.idOf(e.source) ?: return null
+    return when {
+        id in o.downloaded -> "받음"
+        o.progress?.videoId == id -> "받는 중 ${(o.progress.percent * 100).toInt()}%"
+        o.failed[id]?.skip == true -> "받을 수 없음"
+        p.autoDownload -> "받기 대기"
+        else -> null
+    }
+}
+
+private fun ago(t: Long): String {
+    val m = (System.currentTimeMillis() - t) / 60_000
+    return when {
+        m < 1 -> "방금"
+        m < 60 -> "${m}분 전"
+        m < 24 * 60 -> "${m / 60}시간 전"
+        else -> "${m / (24 * 60)}일 전"
+    }
+}
+
+@Composable
+private fun OfflineCard(
+    playlist: Playlist, o: PlaylistOffline,
+    onToggle: (Boolean) -> Unit, onSyncNow: () -> Unit, onUnlink: () -> Unit, onRetry: () -> Unit,
+) {
+    val ids = playlist.items.mapNotNull { Offline.idOf(it.source) }.distinct()
+    val have = ids.count { it in o.downloaded }
+    val failed = ids.count { o.failed[it]?.skip == true }
+    val current = o.progress?.takeIf { it.videoId in ids }
+    val summary = when {
+        ids.isEmpty() -> "유튜브 영상을 받아 두면 인터넷 없이 바로 재생됩니다"
+        current != null -> "받는 중 ${(current.percent * 100).toInt()}% · ${ids.size}개 중 ${have}개 받음"
+        playlist.autoDownload && have + failed < ids.size ->
+            "${ids.size}개 중 ${have}개 받음 · " + if (o.wifiOnly) "와이파이에서 이어 받음" else "이어 받음"
+        playlist.autoDownload -> "${ids.size}개 중 ${have}개 받음 · 인터넷 없이 재생됩니다"
+        have > 0 -> "${ids.size}개 중 ${have}개 받아 둠 · 켜면 나머지도 받습니다"
+        else -> "켜면 유튜브 영상을 차례로 받아 두어 인터넷 없이 바로 재생합니다"
+    }
+    Column(
+        Modifier.padding(horizontal = 20.dp, vertical = 6.dp).fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Surface)
+            .padding(start = 14.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.DownloadForOffline, null, tint = if (playlist.autoDownload) Accent else Muted)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text("미리 받기", color = Ink, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                Text(summary, color = Muted, fontSize = 12.sp)
+            }
+            Switch(
+                checked = playlist.autoDownload, onCheckedChange = onToggle,
+                colors = SwitchDefaults.colors(checkedTrackColor = Accent, checkedThumbColor = Bg),
+            )
+        }
+        o.notice?.takeIf { playlist.autoDownload }?.let { Text(it, color = Warn, fontSize = 12.sp) }
+        if (failed > 0) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("받을 수 없는 영상 ${failed}개(삭제·비공개 등)", color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                TextButton(onClick = onRetry) { Text("다시 시도", color = Accent, fontSize = 12.sp) }
+            }
+        }
+        playlist.syncUrl?.let {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Link, null, tint = Accent, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "유튜브 재생목록 연결됨" + if (playlist.syncedAt > 0) " · ${ago(playlist.syncedAt)} 확인" else "",
+                    color = Ink, fontSize = 12.sp, modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onSyncNow) { Text("지금 확인", color = Accent, fontSize = 12.sp) }
+                TextButton(onClick = onUnlink) { Text("끊기", color = Muted, fontSize = 12.sp) }
+            }
+            playlist.syncError?.let { Text(it, color = Warn, fontSize = 12.sp) }
+        }
     }
 }

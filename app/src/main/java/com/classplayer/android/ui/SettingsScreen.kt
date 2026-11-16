@@ -32,6 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.classplayer.android.data.Playlist
+import com.classplayer.android.offline.Offline
 import com.classplayer.android.player.UiState
 import com.classplayer.android.schedule.Scheduler
 import com.classplayer.android.ui.theme.Accent
@@ -76,12 +77,29 @@ fun SettingsScreen(
     onRemoveLockPassword: (String) -> String? = { null },
     onShareApp: () -> Unit = {},
     onCopyInstallLink: () -> Unit = {},
+    offlineCount: Int = 0,
+    offlineBytes: Long = 0L,
+    offlineProgress: Offline.Progress? = null,
+    offlineNotice: String? = null,
+    offlineWifiOnly: Boolean = true,
+    offlineQuality: Int = 720,
+    onOfflineWifiOnly: (Boolean) -> Unit = {},
+    onOfflineQuality: (Int) -> Unit = {},
+    onPruneOffline: () -> Unit = {},
+    onClearOffline: () -> Unit = {},
 ) {
     var dialog by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
     when (dialog) {
         "set" -> PasswordSetDialog(hasLockPassword, { dialog = null }, onSetLockPassword)
         "unlock" -> PasswordAskDialog("영상 잠금 풀기", "비밀번호를 넣으면 영상이 보입니다.", "풀기", { dialog = null }, onUnlockVideo)
         "remove" -> PasswordAskDialog("영상 잠금 없애기", "비밀번호를 지우면 잠금 기능이 꺼집니다.", "지우기", { dialog = null }, onRemoveLockPassword)
+        "clearOffline" -> androidx.compose.material3.AlertDialog(
+            onDismissRequest = { dialog = null },
+            title = { Text("받아 둔 영상 모두 지우기") },
+            text = { Text("미리 받은 영상 ${offlineCount}개(${formatBytes(offlineBytes)})를 지우고, 다시 받지 않도록 모든 재생목록의 미리 받기를 끕니다. 재생목록 자체는 그대로 남습니다.") },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { dialog = null; onClearOffline() }) { Text("모두 지우기") } },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { dialog = null }) { Text("취소") } },
+        )
     }
     Column(Modifier.fillMaxSize().background(Bg)) {
         Row(Modifier.padding(start = 4.dp, end = 12.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -117,6 +135,24 @@ fun SettingsScreen(
                 Text("$savedCount 개 · 앱 다운로드 폴더", color = Ink, fontSize = 14.sp)
                 Text(savedDir, color = Muted, fontSize = 12.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { Pill("저장됨 목록 열기", false, onOpenSaved) }
+            }
+            Card("미리 받기") {
+                Text("받아 둔 영상 ${offlineCount}개 · ${formatBytes(offlineBytes)}", color = Ink, fontSize = 14.sp)
+                offlineProgress?.let { p ->
+                    Text("받는 중 (${p.index}/${p.total}) ${(p.percent * 100).toInt()}% · ${p.title}", color = Accent, fontSize = 12.sp, maxLines = 1)
+                }
+                offlineNotice?.let { Text(it, color = Accent, fontSize = 12.sp) }
+                Text("재생목록 화면에서 '미리 받기'를 켜면 유튜브 영상을 하나씩 받아 둡니다. 받은 영상은 로딩 없이 바로, 인터넷 없이도 재생됩니다.", color = Muted, fontSize = 12.sp)
+                SwitchRow("와이파이에서만 받기", "모바일 데이터로는 받지 않습니다(10분 영상이 720p로 약 100MB).", offlineWifiOnly, onOfflineWifiOnly)
+                Text("화질", color = Muted, fontSize = 12.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Pill("720p · 작게", offlineQuality <= 720, { onOfflineQuality(720) })
+                    Pill("1080p · 선명", offlineQuality > 720, { onOfflineQuality(1080) })
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Pill("안 쓰는 파일 정리", false, onPruneOffline)
+                    if (offlineCount > 0) Pill("모두 지우기", false, { dialog = "clearOffline" })
+                }
             }
             Card("다른 폰에 설치하기") {
                 Text("카카오톡·문자 등으로 설치 링크를 보내면, 받은 사람이 눌러서 바로 받을 수 있어요. 링크는 항상 최신 버전을 받습니다.", color = Muted, fontSize = 13.sp)
@@ -168,6 +204,13 @@ fun SettingsScreen(
             Spacer(Modifier.height(24.dp))
         }
     }
+}
+
+/** 1234567 → "1.2MB" */
+private fun formatBytes(b: Long): String = when {
+    b >= 1024L * 1024 * 1024 -> String.format(java.util.Locale.US, "%.1fGB", b / (1024.0 * 1024 * 1024))
+    b >= 1024L * 1024 -> "${b / (1024 * 1024)}MB"
+    else -> "${b / 1024}KB"
 }
 
 @Composable

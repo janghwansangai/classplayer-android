@@ -8,7 +8,7 @@
 - 번들 yt-dlp는 구버전이라 403이 났다. 앱 시작 시 하루 한 번 자동 업데이트 + 홈 화면 수동 버튼.
 - 360도: SphereRenderer(u = 1 - lon, v = 1 - lat, view = rotX(-pitch)·rotY(-yaw)). 2026-11-13 색상 라벨 영상으로 방향 검증. 바꾸면 반드시 다시 확인.
 - 검증 방법: `adb shell am start -a android.intent.action.VIEW -d <content uri 또는 유튜브 링크> -n com.classplayer.android/.MainActivity` 후 `adb exec-out screencap -p`로 캡처해서 직접 본다.
-- 아직 없는 것: 실기기 검증, HEVC/AV1 실기 확인, 유튜브 생방송 테스트, 다운로드(미리 받기) 기능.
+- 아직 없는 것: 실기기 검증, HEVC/AV1 실기 확인, 유튜브 생방송 테스트.
 - v0.2.0(시안 B 다크 뮤직형): 재생목록/즐겨찾기/최근은 `data/LibraryRepository`(files/library.json). 유튜브 큐는 `player/LazyYoutubeMediaSource`가 재생 직전에 yt-dlp로 푼다(ExoPlayer가 다음 곡을 미리 준비하므로 곡 넘김이 빠름). 링크 제목·썸네일은 `youtube/YoutubeMeta`(oEmbed, 재생목록 링크는 yt-dlp --flat-playlist). 앱이 뒤로 가면 영상 트랙만 끄고 계속 재생(`onAppBackground`).
 - 디자인 시안 캔버스: https://claude.ai/artifact/W1fDqmSqS5ZZZ7tvy2LZch (A 밝은 카드형, B 다크 뮤직형(채택), C 한 손 미니멀).
 - v0.3.0: 설정 화면(Screen.Settings), 녹화(record/RecordManager), 예약(schedule/), 업데이트(update/Updater, 깃허브 releases/latest의 .apk), 오류 신고(PlayerViewModel.openBugReport, 프로그램 ID class-player-app). 화면 가장자리는 MainActivity의 safeDrawingPadding으로 처리(가로 전체화면 제외).
@@ -25,4 +25,11 @@
   - 앱 시작 때 yt-dlp 업데이트는 최대 20초만 기다린다(라이브러리의 업데이트 확인에 시간 제한이 없음). 내 기기 영상은 엔진 준비를 기다리지 않는다(requireReady(needsYoutube)).
   - 새 APK는 받은 뒤 크기·패키지·버전·서명을 확인(Updater.verifyApk).
   - 잠금 비밀번호 5번 틀리면 30초부터 두 배씩(최대 10분) 대기(AppSettings.tryPassword).
+- v0.7.0 미리 받기(2026-11-17): offline/Offline.kt + OfflineWorkers.kt(WorkManager 2.10.0).
+  - Playlist.autoDownload(미리 받기), syncUrl/syncedAt/syncError(연결한 유튜브 재생목록). 좋아요(LL)·나중에 볼(WL)은 늘 비공개라 거부하고 '일부 공개' 재생목록을 쓰게 안내.
+  - 파일은 getExternalFilesDir("Offline")/영상ID.mp4. 이 이름이 있으면 완성본(yt-dlp가 다 받은 뒤에 이름을 바꿈). 실패 기록은 files/offline_failed.json(삭제·비공개는 바로, 그 밖은 3번 실패하면 건너뜀).
+  - ClassMediaSourceFactory가 Offline.fileFor(uri)가 있으면 유튜브 대신 파일을 튼다. StreamResolver.prefetch도 받은 영상은 건너뜀.
+  - 내려받기는 unique work "offline-download"(APPEND_OR_REPLACE, 와이파이만이면 UNMETERED). 포그라운드(dataSync) 승격은 뒤에 있으면 막힐 수 있어 runCatching, 막혀도 10분 제한 뒤 이어 받음. 실패가 남으면 Result.retry.
+  - 동기화는 periodic "offline-sync-periodic"(6시간) + 앱 열 때 1시간 지났으면 "offline-sync-now". 새 영상은 뒤에 붙이기만 하고 지우지 않는다.
+  - 에뮬레이터는 한글 키보드라 adb input text로 링크를 못 넣는다. 시험할 땐 library.json에 syncUrl을 넣어 확인했다.
 - v0.5.0 영상 잠금: AppSettings(lockSalt/lockHash SHA-256, videoLocked), PlayerViewModel.lockVideo/unlockVideo/setLockPassword/removeLockPassword, ui/VideoLock.kt 대화상자. 잠기면 applyVideoEnabled가 영상 트랙을 끄고 화면엔 자물쇠. 사용자 요청은 "영상(화면)만" 잠그기 — 유튜브 재생·소리는 막지 않는다(2026-11-15 확인).

@@ -85,6 +85,25 @@ class LibraryRepository(context: Context) {
 
     fun deletePlaylist(id: String) = edit { _playlists.value = _playlists.value.filter { it.id != id } }
 
+    // ---- 미리 받기·유튜브 재생목록 연결 ----
+    fun setAutoDownload(id: String, on: Boolean) = changePlaylist(id) { it.copy(autoDownload = on) }
+
+    fun setSyncUrl(id: String, url: String?) = changePlaylist(id) { it.copy(syncUrl = url, syncedAt = 0L, syncError = null) }
+
+    /** 연결한 재생목록을 확인한 결과. 새 항목은 뒤에 붙이고(겹치면 건너뜀), 몇 개 늘었는지 돌려준다. */
+    fun applySync(id: String, entries: List<MediaEntry>?, error: String?): Int = edit {
+        var added = 0
+        _playlists.value = _playlists.value.map { p ->
+            if (p.id != id) p else {
+                val existing = p.items.map { it.source }.toSet()
+                val fresh = entries.orEmpty().distinctBy { it.source }.filter { it.source !in existing }
+                added = fresh.size
+                p.copy(items = p.items + fresh, syncedAt = System.currentTimeMillis(), syncError = error)
+            }
+        }
+        added
+    }
+
     /** 빈 이름이면 그대로 둔다. */
     fun renamePlaylist(id: String, name: String) = changePlaylist(id) { if (name.isBlank()) it else it.copy(name = name.trim()) }
 

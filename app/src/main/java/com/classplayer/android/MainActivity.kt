@@ -26,6 +26,8 @@ import com.classplayer.android.player.UiState
 import com.classplayer.android.ui.HomeScreen
 import com.classplayer.android.ui.PlayerScreen
 import com.classplayer.android.ui.PlaylistScreen
+import com.classplayer.android.ui.PlaylistOffline
+import com.classplayer.android.offline.Offline
 import com.classplayer.android.ui.SearchScreen
 import com.classplayer.android.ui.SettingsScreen
 import com.classplayer.android.ui.theme.Bg
@@ -78,6 +80,13 @@ class MainActivity : ComponentActivity() {
                 val update by vm.update.collectAsState()
                 val videoLocked by vm.settings.videoLocked.collectAsState()
                 val hasLockPassword by vm.settings.hasLockPassword.collectAsState()
+                val offlineFiles by vm.offlineFiles.collectAsState()
+                val offlineBytes by vm.offlineBytes.collectAsState()
+                val offlineProgress by vm.offlineProgress.collectAsState()
+                val offlineFailed by vm.offlineFailed.collectAsState()
+                val offlineNotice by vm.offlineNotice.collectAsState()
+                val offlineWifiOnly by vm.settings.offlineWifiOnly.collectAsState()
+                val offlineQuality by vm.settings.offlineQuality.collectAsState()
                 val ctx = LocalContext.current
 
                 LaunchedEffect(state.status) {
@@ -139,6 +148,7 @@ class MainActivity : ComponentActivity() {
                             onStopIn = vm::stopIn, onStopAt = vm::stopAt, onCancelStop = vm::cancelStop,
                             videoLocked = videoLocked, hasLockPassword = hasLockPassword,
                             onLockVideo = vm::lockVideo, onUnlockVideo = vm::unlockVideo, onSetLockPassword = vm::setLockPassword,
+                            offline = state.current?.let { c -> Offline.idOf(c.source)?.let { it in offlineFiles } } == true,
                         )
                     }
                     UiState.Screen.PlaylistEdit -> {
@@ -155,6 +165,12 @@ class MainActivity : ComponentActivity() {
                             onMove = { a, b -> vm.moveInPlaylist(p.id, a, b) },
                             onPlayFrom = { vm.playPlaylist(vm.library.playlist(p.id) ?: p, it) },
                             onCycleRepeat = vm::cycleRepeat, onToggleShuffle = vm::toggleShuffle,
+                            offline = PlaylistOffline(offlineFiles.keys, offlineProgress, offlineFailed, offlineNotice, offlineWifiOnly),
+                            onSetAutoDownload = { on, del -> vm.setAutoDownload(p.id, on, del) },
+                            onLinkPlaylist = { vm.linkPlaylist(p.id, it) },
+                            onUnlink = { vm.unlinkPlaylist(p.id) },
+                            onSyncNow = { vm.syncPlaylistNow(p.id) },
+                            onRetryOffline = { vm.retryOffline(p.id) },
                         )
                     }
                     UiState.Screen.Search -> {
@@ -190,6 +206,11 @@ class MainActivity : ComponentActivity() {
                             onLockVideo = vm::lockVideo, onUnlockVideo = vm::unlockVideo,
                             onSetLockPassword = vm::setLockPassword, onRemoveLockPassword = vm::removeLockPassword,
                             onShareApp = vm::shareApp, onCopyInstallLink = vm::copyInstallLink,
+                            offlineCount = offlineFiles.size, offlineBytes = offlineBytes,
+                            offlineProgress = offlineProgress, offlineNotice = offlineNotice,
+                            offlineWifiOnly = offlineWifiOnly, offlineQuality = offlineQuality,
+                            onOfflineWifiOnly = vm::setOfflineWifiOnly, onOfflineQuality = vm::setOfflineQuality,
+                            onPruneOffline = vm::pruneOffline, onClearOffline = vm::clearOffline,
                         )
                     }
                 }

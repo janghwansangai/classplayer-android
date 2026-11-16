@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import com.classplayer.android.data.AppSettings
 import com.classplayer.android.data.LibraryRepository
+import com.classplayer.android.offline.Offline
 import com.classplayer.android.record.RecordManager
 import com.classplayer.android.schedule.Scheduler
 import com.yausername.ffmpeg.FFmpeg
@@ -44,6 +45,7 @@ class ClassPlayerApp : Application() {
     override fun onCreate() {
         super.onCreate()
         Scheduler.restore(this) // 앱 업데이트 등으로 지워진 예약 알람을 다시 건다
+        Offline.init(this) // 받아 둔 영상 목록(재생할 때 유튜브 대신 쓴다)
         scope.launch {
             try {
                 YoutubeDL.getInstance().init(this@ClassPlayerApp)

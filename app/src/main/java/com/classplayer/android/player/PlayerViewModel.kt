@@ -21,6 +21,7 @@ import com.classplayer.android.data.LibraryRepository
 import com.classplayer.android.data.MediaEntry
 import com.classplayer.android.data.Playlist
 import com.classplayer.android.data.toMediaItem
+import com.classplayer.android.offline.Offline
 import com.classplayer.android.record.RecordJob
 import com.classplayer.android.record.SavedFile
 import com.classplayer.android.schedule.Scheduler
@@ -117,6 +118,12 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { recorder.events.collect { notify(it) } }
         // 재생 오류·곡 건너뜀 안내는 서비스가 처리하고 문구만 넘겨준다
         viewModelScope.launch { PlaybackService.messages.collect { notify(it) } }
+        // 미리 받기: 정기 확인을 걸어 두고, 오래됐으면 연결한 재생목록을 확인하고, 못 받은 것이 있으면 이어 받는다
+        runCatching {
+            Offline.ensurePeriodicSync(app)
+            Offline.syncIfStale(app)
+            Offline.schedule(app)
+        }.onFailure { Log.w(ClassPlayerApp.TAG, "미리 받기 예약 실패", it) }
         autoCheckUpdate()
     }
 
@@ -430,7 +437,9 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     fun addEntryToPlaylist(playlistId: String, e: MediaEntry) {
         library.addToPlaylist(playlistId, listOf(e))
-        notify("'${library.playlist(playlistId)?.name ?: "재생목록"}'에 추가했습니다")
+        val p = library.playlist(playlistId)
+        notify("'${p?.name ?: "재생목록"}'에 추가했습니다" + if (p?.autoDownload == true) " · 미리 받기 예정" else "")
+        Offline.schedule(ctx)
     }
 
     fun createPlaylistWith(name: String, e: MediaEntry) {
@@ -560,6 +569,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                 library.addToPlaylist(playlistId, entries)
                 val added = (library.playlist(playlistId)?.items?.size ?: 0) - before
                 notify(if (added > 0) "${added}개 추가했습니다" else "이미 들어 있는 영상입니다")
+                Offline.schedule(ctx)
             } catch (e: Exception) {
                 notify("추가 실패: ${e.message}")
             }
@@ -578,7 +588,107 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         val e = _state.value.current ?: return
         library.addToPlaylist(playlistId, listOf(e))
         notify("재생목록에 추가했습니다")
+        Offline.schedule(ctx)
     }
+
+    // ---- 미리 받기·유튜브 재생목록 연결 ----
+    val offlineFiles = Offline.files
+    val offlineBytes = Offline.bytes
+    val offlineProgress = Offline.progress
+    val offlineFailed = Offline.failed
+    val offlineNotice = Offline.notice
+
+    /** 재생목록의 미리 받기 켜기/끄기. 끌 때 deleteFiles면 받은 파일도 지운다(다른 미리 받기 재생목록에 있는 것은 남김). */
+    fun setAutoDownload(playlistId: String, on: Boolean, deleteFiles: Boolean = false) {
+        library.setAutoDownload(playlistId, on)
+        Offline.ensurePeriodicSync(ctx)
+        if (on) {
+            val n = Offline.pending(library).size
+            Offline.schedule(ctx)
+            notify(
+                when {
+                    n == 0 -> "미리 받기를 켰습니다. 받을 유튜브 영상이 없거나 이미 다 받았습니다"
+                    settings.offlineWifiOnly.value -> "미리 받기를 켰습니다. 와이파이에서 ${n}개를 차례로 받습니다"
+                    else -> "미리 받기를 켰습니다. ${n}개를 차례로 받습니다"
+                },
+            )
+        } else {
+            Offline.schedule(ctx, replace = true) // 이 재생목록 것만 받던 중이면 멈춘다
+            if (deleteFiles) notify("미리 받기를 끄고 받은 파일 ${Offline.deleteForPlaylist(ctx, library, playlistId)}개를 지웠습니다")
+            else notify("미리 받기를 껐습니다. 받은 파일은 남겨 둡니다")
+        }
+    }
+
+    /** 유튜브 재생목록(공개·일부 공개)을 연결한다. 지금 한 번 가져오고, 그 뒤로는 6시간마다·앱을 열 때 새 영상을 가져온다. */
+    fun linkPlaylist(playlistId: String, text: String) {
+        val url = StreamResolver.extractUrl(text)?.takeIf { StreamResolver.isYoutubeUrl(it) }
+        val listId = url?.let(YoutubeMeta::playlistId)
+        if (listId.isNullOrBlank()) { notify("유튜브 재생목록 링크가 아닙니다"); return }
+        // 좋아요(LL)·나중에 볼 동영상(WL)·좋아요한 음악(LM)은 늘 비공개라 로그인 없이는 못 읽는다
+        if (listId == "LL" || listId == "WL" || listId == "LM") {
+            notify("좋아요·나중에 볼 동영상 목록은 로그인이 필요해 연결할 수 없습니다. '일부 공개' 재생목록에 저장한 뒤 그 링크를 넣어 주세요.")
+            return
+        }
+        library.setSyncUrl(playlistId, "https://www.youtube.com/playlist?list=$listId")
+        Offline.ensurePeriodicSync(ctx)
+        syncPlaylistNow(playlistId, justLinked = true)
+    }
+
+    fun unlinkPlaylist(playlistId: String) {
+        library.setSyncUrl(playlistId, null)
+        Offline.ensurePeriodicSync(ctx)
+        notify("연결을 끊었습니다. 이미 가져온 영상은 남겨 둡니다")
+    }
+
+    fun syncPlaylistNow(playlistId: String, justLinked: Boolean = false) {
+        notify("유튜브 재생목록을 확인하는 중…")
+        viewModelScope.launch {
+            val app = getApplication<ClassPlayerApp>()
+            val n = Offline.syncPlaylist(app, playlistId)
+            notify(
+                when {
+                    n == null -> library.playlist(playlistId)?.syncError ?: "재생목록을 확인하지 못했습니다"
+                    n == 0 -> if (justLinked) "연결했습니다. 새로 가져올 영상은 없습니다" else "새 영상이 없습니다"
+                    else -> (if (justLinked) "연결했습니다. " else "") + "새 영상 ${n}개를 가져왔습니다"
+                },
+            )
+            Offline.schedule(ctx)
+        }
+    }
+
+    /** 받지 못한 영상을 다시 받아 본다. */
+    fun retryOffline(playlistId: String) {
+        val ids = library.playlist(playlistId)?.items?.mapNotNull { Offline.idOf(it.source) }.orEmpty()
+        Offline.clearFailed(ctx, ids)
+        Offline.setNotice(null)
+        Offline.schedule(ctx)
+        notify("받지 못한 영상을 다시 받아 봅니다")
+    }
+
+    fun setOfflineWifiOnly(on: Boolean) {
+        settings.setOfflineWifiOnly(on)
+        Offline.schedule(ctx, replace = true) // 받는 조건(와이파이/아무 인터넷)을 새로 적용
+    }
+
+    fun setOfflineQuality(height: Int) {
+        settings.setOfflineQuality(height)
+        notify("앞으로 받는 영상은 ${height}p로 받습니다")
+    }
+
+    fun pruneOffline() {
+        val n = Offline.prune(ctx, library)
+        notify(if (n == 0) "정리할 파일이 없습니다" else "재생목록에 없는 영상 파일 ${n}개를 지웠습니다")
+    }
+
+    /** 받은 파일을 모두 지운다. 다시 받지 않도록 모든 재생목록의 미리 받기도 끈다. */
+    fun clearOffline() {
+        library.playlists.value.filter { it.autoDownload }.forEach { library.setAutoDownload(it.id, false) }
+        Offline.clearAll(ctx)
+        Offline.ensurePeriodicSync(ctx)
+        notify("받아 둔 영상을 모두 지우고 미리 받기를 껐습니다")
+    }
+
+    fun isOffline(e: MediaEntry?): Boolean = e != null && Offline.fileFor(e.source) != null
 
     // ---- 엔진 ----
     fun updateYtDlp() {
