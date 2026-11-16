@@ -30,9 +30,9 @@ private fun PwField(value: String, label: String, onChange: (String) -> Unit) {
     )
 }
 
-/** 비밀번호 한 번 넣기(잠금 풀기·비밀번호 지우기). onSubmit이 false면 "틀렸습니다". */
+/** 비밀번호 한 번 넣기(잠금 풀기·비밀번호 지우기). onSubmit은 오류 문구(성공이면 null)를 돌려준다. */
 @Composable
-fun PasswordAskDialog(title: String, desc: String, confirmText: String, onDismiss: () -> Unit, onSubmit: (String) -> Boolean) {
+fun PasswordAskDialog(title: String, desc: String, confirmText: String, onDismiss: () -> Unit, onSubmit: (String) -> String?) {
     var pw by remember { mutableStateOf("") }
     var err by remember { mutableStateOf<String?>(null) }
     AlertDialog(
@@ -45,7 +45,7 @@ fun PasswordAskDialog(title: String, desc: String, confirmText: String, onDismis
                 err?.let { Text(it, color = Error, fontSize = 13.sp) }
             }
         },
-        confirmButton = { TextButton(onClick = { if (onSubmit(pw)) onDismiss() else { err = "비밀번호가 틀렸습니다"; pw = "" } }) { Text(confirmText) } },
+        confirmButton = { TextButton(onClick = { val e = onSubmit(pw); if (e == null) onDismiss() else { err = e; pw = "" } }) { Text(confirmText) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } },
     )
 }

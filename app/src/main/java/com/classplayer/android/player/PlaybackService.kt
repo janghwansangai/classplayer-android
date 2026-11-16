@@ -31,6 +31,9 @@ import com.classplayer.android.ClassPlayerApp
 import com.classplayer.android.youtube.StreamResolver
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import androidx.media3.common.PlaybackException
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 
 /**
  * 재생 엔진(ExoPlayer)을 들고 있는 포그라운드 서비스.
@@ -44,6 +47,8 @@ class PlaybackService : MediaSessionService() {
     private val audioAttrs = AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build()
     private var focusOff = false
     private var scheduledStartAt = 0L
+    private val retried = HashSet<String>() // 이번 곡에서 이미 주소를 다시 푼 유튜브 링크
+    private var failStreak = 0 // 연달아 건너뛴 곡 수(전부 안 될 때 끝없이 돌지 않게)
 
     override fun onCreate() {
         super.onCreate()
@@ -69,6 +74,14 @@ class PlaybackService : MediaSessionService() {
             override fun onPlaybackSuppressionReasonChanged(reason: Int) {
                 android.util.Log.i(ClassPlayerApp.TAG, "suppression=$reason")
             }
+
+            override fun onPlayerError(error: PlaybackException) = recover(player, error)
+
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_READY) failStreak = 0
+            }
+
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) { retried.clear() }
         })
         session = MediaSession.Builder(this, player)
             .setCallback(SessionCallback())
@@ -127,6 +140,31 @@ class PlaybackService : MediaSessionService() {
         player.prepare()
     }
 
+    /**
+     * 재생 오류 처리. 화면이 없어도(예약 재생·화면 꺼짐) 여기서 처리해야 수업 중 재생목록이 멈추지 않는다.
+     * - 저장해 둔 유튜브 주소가 만료·거부(403 등)되면, 곡마다 한 번 새로 풀어서 같은 위치부터 다시 재생
+     * - 그래도 안 되는 곡(삭제·비공개 영상, 지워진 파일 등)은 건너뛰고 다음 곡. 전부 안 되면 멈춘다.
+     */
+    private fun recover(player: ExoPlayer, error: PlaybackException) {
+        android.util.Log.e(ClassPlayerApp.TAG, "재생 오류", error)
+        val src = player.currentMediaItem?.localConfiguration?.uri?.toString().orEmpty()
+        if (StreamResolver.isYoutubeUrl(src) && error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS && retried.add(src)) {
+            StreamResolver.invalidate(this, src)
+            player.prepare()
+            return
+        }
+        val cause = error.cause?.message?.takeIf { it.startsWith("유튜브") } ?: error.errorCodeName
+        if (player.mediaItemCount > 1 && failStreak < player.mediaItemCount - 1 && player.hasNextMediaItem()) {
+            failStreak++
+            _messages.tryEmit("재생할 수 없어 다음 곡으로 넘어갑니다 ($cause)")
+            player.seekToNextMediaItem()
+            player.prepare()
+            return
+        }
+        failStreak = 0
+        _messages.tryEmit("재생할 수 없습니다: $cause")
+    }
+
     /** 예약 종료: 5초 동안 소리를 줄인 뒤 멈춘다. */
     fun stopBySchedule() {
         val player = session?.player ?: return
@@ -178,6 +216,10 @@ class PlaybackService : MediaSessionService() {
     companion object {
         /** 같은 프로세스 안에서 예약 종료를 전달하기 위한 참조. */
         @Volatile var instance: PlaybackService? = null
+
+        /** 화면에 띄울 안내(재생 오류·곡 건너뜀). 화면(뷰모델)이 있으면 토스트로 보여 준다. */
+        private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
+        val messages: SharedFlow<String> = _messages
         const val ACTION_SCHEDULED_START = "com.classplayer.android.SCHEDULED_START"
         const val EXTRA_PLAYLIST_ID = "playlistId"
         private const val SCHEDULE_CHANNEL = "classplayer_schedule"

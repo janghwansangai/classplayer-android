@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
@@ -119,7 +121,7 @@ fun PlayerScreen(
     videoLocked: Boolean = false,
     hasLockPassword: Boolean = false,
     onLockVideo: () -> Boolean = { false },
-    onUnlockVideo: (String) -> Boolean = { false },
+    onUnlockVideo: (String) -> String? = { null },
     onSetLockPassword: (String?, String, String) -> String? = { _, _, _ -> null },
 ) {
     var position by remember { mutableLongStateOf(0L) }
@@ -141,6 +143,7 @@ fun PlayerScreen(
                 if (!dragging) position = it.currentPosition.coerceAtLeast(0)
                 duration = it.duration.coerceAtLeast(0)
                 isPlaying = it.isPlaying
+                speed = it.playbackParameters.speed // 화면을 나갔다 와도 실제 속도를 보여 준다
             }
             delay(500)
         }
@@ -252,7 +255,7 @@ fun PlayerScreen(
             Spacer(Modifier.height(14.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val speeds = listOf(0.75f, 1f, 1.25f, 1.5f, 2f)
-                Pill("${speed}x", false, { val i = (speeds.indexOf(speed) + 1) % speeds.size; speed = speeds[i]; onSetSpeed(speed) })
+                Pill("${speed}x", false, { val i = (speeds.indexOfFirst { kotlin.math.abs(it - speed) < 0.01f } + 1) % speeds.size; speed = speeds[i]; onSetSpeed(speed) })
                 Pill("−10초", false, { onSeekBy(-10_000) }, Icons.Default.Replay10)
                 Pill("+10초", false, { onSeekBy(10_000) }, Icons.Default.Forward10)
                 Spacer(Modifier.weight(1f))
@@ -312,7 +315,8 @@ fun PlayerScreen(
             onDismissRequest = { showAdd = false },
             title = { Text("재생목록에 추가") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                // 재생목록이 많아도 아래 '새 재생목록' 칸이 밀려 사라지지 않게 스크롤한다
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     playlists.forEach { p ->
                         Text(
                             "${p.name} (${p.items.size}곡)", fontSize = 16.sp,
@@ -336,7 +340,10 @@ private fun LandscapePlayer(
     onSeekTo: (Long) -> Unit, onCycleRepeat: () -> Unit, onToggleLandscape: () -> Unit,
 ) {
     var controls by remember { mutableStateOf(true) }
-    LaunchedEffect(controls, isPlaying) { if (controls && isPlaying) { delay(4000); controls = false } }
+    // 끄는 동안에는 손가락 위치를 보여 주고, 손을 뗄 때 한 번만 옮긴다(끄는 내내 옮기면 유튜브는 계속 다시 불러와 끊긴다)
+    var dragging by remember { mutableStateOf(false) }
+    var dragValue by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(controls, isPlaying, dragging) { if (controls && isPlaying && !dragging) { delay(4000); controls = false } }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         video(Modifier.fillMaxSize())
         Box(Modifier.fillMaxSize().clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { controls = !controls })
@@ -353,10 +360,11 @@ private fun LandscapePlayer(
                     RoundIconButton(Icons.Default.ScreenRotation, "세로로 보기", 44.dp, Accent, Bg, onToggleLandscape)
                 }
                 Row(Modifier.fillMaxWidth().align(Alignment.BottomCenter).background(Color.Black.copy(alpha = 0.55f)).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(formatDuration(position / 1000), color = Ink, fontSize = 12.sp)
+                    Text(formatDuration((if (dragging) (dragValue * duration).toLong() else position) / 1000), color = Ink, fontSize = 12.sp)
                     Slider(
-                        value = if (duration > 0) position.toFloat() / duration else 0f,
-                        onValueChange = { onSeekTo((it * duration).toLong()) },
+                        value = if (dragging) dragValue else if (duration > 0) position.toFloat() / duration else 0f,
+                        onValueChange = { dragging = true; dragValue = it },
+                        onValueChangeFinished = { dragging = false; onSeekTo((dragValue * duration).toLong()) },
                         modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
                         colors = SliderDefaults.colors(thumbColor = Ink, activeTrackColor = Accent, inactiveTrackColor = Line),
                     )

@@ -38,6 +38,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 /** 화면 상태. */
@@ -94,7 +95,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     private var vrSurface: Surface? = null
     private var pendingAction: (() -> Unit)? = null // 엔진 준비 전에 들어온 요청
     private var inBackground = false
-    private val retried = HashSet<String>()
 
     init {
         viewModelScope.launch {
@@ -104,13 +104,19 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                         _state.update { it.copy(ytReady = true, ytVersion = runCatching { YoutubeDL.getInstance().version(app) }.getOrNull()) }
                         pendingAction?.let { a -> pendingAction = null; a() }
                     }
-                    is ClassPlayerApp.YtState.Failed -> notify("유튜브 엔진 준비 실패: ${s.message}")
+                    is ClassPlayerApp.YtState.Failed -> {
+                        pendingAction = null
+                        _state.update { it.copy(loading = null) }
+                        notify("유튜브 엔진 준비 실패: ${s.message}")
+                    }
                     else -> Unit
                 }
             }
         }
         connectController()
         viewModelScope.launch { recorder.events.collect { notify(it) } }
+        // 재생 오류·곡 건너뜀 안내는 서비스가 처리하고 문구만 넘겨준다
+        viewModelScope.launch { PlaybackService.messages.collect { notify(it) } }
         autoCheckUpdate()
     }
 
@@ -123,6 +129,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                 .onSuccess { c ->
                     c.addListener(playerListener)
                     c.repeatMode = _state.value.repeatMode
+                    vrSurface?.let(c::setVideoSurface) // 360도 화면이 먼저 만들어진 경우
                     _controller.value = c
                     syncQueueFromController()
                     pendingAction?.let { a -> pendingAction = null; a() }
@@ -133,18 +140,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     private val playerListener = object : Player.Listener {
         override fun onPlayerError(error: PlaybackException) {
-            Log.e(ClassPlayerApp.TAG, "재생 오류", error)
-            // 저장해 둔 유튜브 주소가 만료/거부되면 한 번만 새로 풀어서 다시 시도
-            val cur = _state.value.current
-            val c = _controller.value
-            if (cur != null && c != null && cur.isLink && error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS && retried.add(cur.id)) {
-                StreamResolver.invalidate(getApplication(), cur.source)
-                c.prepare(); c.play()
-                return
-            }
+            // 다시 풀기·다음 곡 건너뛰기와 안내 문구는 PlaybackService.recover가 맡는다
             _state.update { it.copy(loading = null) }
-            val cause = error.cause?.message?.takeIf { it.startsWith("유튜브") } ?: error.errorCodeName
-            notify("재생할 수 없습니다: $cause")
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -182,28 +179,37 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     fun toggleLandscape() = _state.update { it.copy(landscape = !it.landscape) }
 
     // ---- 재생 ----
-    private fun requireReady(action: () -> Unit): Boolean {
-        if (_controller.value == null || !_state.value.ytReady) {
+    /**
+     * 재생 엔진 연결(과, 유튜브면 yt-dlp 준비)이 끝났는지. 아직이면 요청을 기억해 두고 준비되면 실행한다.
+     * 내 기기 영상은 yt-dlp가 필요 없으므로 엔진 준비(업데이트 등)를 기다리지 않고 바로 튼다.
+     */
+    private fun requireReady(needsYoutube: Boolean, action: () -> Unit): Boolean {
+        val ytWaiting = needsYoutube && !_state.value.ytReady
+        if (_controller.value == null || ytWaiting) {
             pendingAction = action
-            _state.update { it.copy(screen = UiState.Screen.Player, loading = "엔진 준비 중…(처음 한 번만 몇 초 걸립니다)") }
+            val msg = if (ytWaiting) "유튜브 엔진 준비 중…(처음 한 번만 몇 초 걸립니다)" else "재생 엔진 준비 중…"
+            _state.update { it.copy(screen = UiState.Screen.Player, loading = msg) }
             return false
         }
         return true
     }
 
+    private fun MediaEntry.isYoutube() = isLink && StreamResolver.isYoutubeUrl(source)
+
     /** 항목 목록을 큐로 삼아 재생한다. */
-    fun playEntries(entries: List<MediaEntry>, startIndex: Int = 0, name: String = "지금 재생") {
+    fun playEntries(entries: List<MediaEntry>, startIndex: Int = 0, name: String = "지금 재생", fromSearch: Boolean = false) {
         if (entries.isEmpty()) { notify("재생할 항목이 없습니다"); return }
-        if (!requireReady { playEntries(entries, startIndex, name) }) return
+        val start = startIndex.coerceIn(0, entries.lastIndex) // 목록이 그 사이 바뀌어도(저장 완료 등) 죽지 않게
+        if (!requireReady(entries[start].isYoutube()) { playEntries(entries, start, name, fromSearch) }) return
         val c = _controller.value!!
         val items = entries.map { it.toMediaItem(name) }
         // 첫 곡과 다음 곡 유튜브 주소를 미리 풀기 시작(로딩 시간 단축)
-        StreamResolver.prefetch(getApplication(), entries[startIndex].source)
-        prefetchAfter(startIndex, entries)
+        StreamResolver.prefetch(getApplication(), entries[start].source)
+        prefetchAfter(start, entries)
         _state.update {
-            it.copy(screen = UiState.Screen.Player, backToSearch = false, queueName = name, queue = entries, queueIndex = startIndex, loading = "불러오는 중…", is360 = entries[startIndex].title.contains("360"))
+            it.copy(screen = UiState.Screen.Player, backToSearch = fromSearch, queueName = name, queue = entries, queueIndex = start, loading = "불러오는 중…", is360 = entries[start].title.contains("360"))
         }
-        c.setMediaItems(items, startIndex, 0)
+        c.setMediaItems(items, start, 0)
         c.repeatMode = _state.value.repeatMode
         c.shuffleModeEnabled = _state.value.shuffle
         applyVideoEnabled(c)
@@ -226,12 +232,16 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun openLink(url: String) {
-        if (!requireReady { openLink(url) }) return
+        if (!requireReady(StreamResolver.isYoutubeUrl(url)) { openLink(url) }) return
         _state.update { it.copy(screen = UiState.Screen.Player, loading = "주소를 확인하는 중…") }
         viewModelScope.launch {
-            if (YoutubeMeta.playlistId(url) != null && YoutubeMeta.videoId(url) == null) {
-                val items = runCatching { YoutubeMeta.expandPlaylist(getApplication(), url) }.getOrElse { notify("재생목록을 읽지 못했습니다: ${it.message}"); emptyList() }
+            if (StreamResolver.isYoutubeUrl(url) && YoutubeMeta.playlistId(url) != null && YoutubeMeta.videoId(url) == null) {
+                val items = runCatching { YoutubeMeta.expandPlaylist(getApplication(), url) }.getOrElse {
+                    Log.e(ClassPlayerApp.TAG, "재생목록 펼치기 실패", it)
+                    emptyList()
+                }
                 if (items.isNotEmpty()) playEntries(items, 0, "유튜브 재생목록")
+                else { _state.update { it.copy(loading = null) }; notify("재생목록을 읽지 못했습니다. 링크와 인터넷 연결을 확인해 주세요.") }
                 return@launch
             }
             val entry = if (StreamResolver.isYoutubeUrl(url)) YoutubeMeta.quickEntry(url)
@@ -249,14 +259,25 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     fun togglePlay() {
         val c = _controller.value ?: return
-        if (c.isPlaying) c.pause() else { if (c.playbackState == Player.STATE_ENDED) c.seekTo(0); c.play() }
+        if (c.isPlaying) { c.pause(); return }
+        when (c.playbackState) {
+            Player.STATE_ENDED -> c.seekTo(0)
+            // 오류로 멈췄거나 예약 종료로 정지된 뒤에는 다시 준비해야 재생된다(안 하면 눌러도 아무 일 없음)
+            Player.STATE_IDLE -> if (c.mediaItemCount > 0) c.prepare()
+        }
+        c.play()
     }
     fun next() { _controller.value?.seekToNextMediaItem() }
     fun previous() {
         val c = _controller.value ?: return
         if (c.currentPosition > 3000 || !c.hasPreviousMediaItem()) c.seekTo(0) else c.seekToPreviousMediaItem()
     }
-    fun seekBy(ms: Long) { val c = _controller.value ?: return; c.seekTo((c.currentPosition + ms).coerceIn(0, c.duration.coerceAtLeast(0))) }
+    fun seekBy(ms: Long) {
+        val c = _controller.value ?: return
+        val d = c.duration // 길이를 모르면(생방송·불러오는 중) C.TIME_UNSET(음수). 그때 0으로 자르면 처음으로 튄다
+        val target = (c.currentPosition + ms).coerceAtLeast(0)
+        c.seekTo(if (d > 0) target.coerceAtMost(d) else target)
+    }
     fun seekTo(ms: Long) { _controller.value?.seekTo(ms) }
     fun setSpeed(speed: Float) { _controller.value?.setPlaybackSpeed(speed) }
 
@@ -292,32 +313,33 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         return true
     }
 
-    /** 풀기: 비밀번호가 맞으면 true. */
-    fun unlockVideo(pw: String): Boolean {
-        if (!settings.checkPassword(pw)) return false
+    /** 풀기: 비밀번호가 맞으면 null, 아니면 오류 문구(여러 번 틀리면 잠시 막힘). */
+    fun unlockVideo(pw: String): String? {
+        settings.tryPassword(pw)?.let { return it }
         settings.setVideoLocked(false)
         _controller.value?.let { applyVideoEnabled(it) }
         notify("영상 잠금을 풀었습니다")
-        return true
+        return null
     }
 
     /** 비밀번호 정하기/바꾸기. 이미 있으면 현재 비밀번호가 맞아야 한다. 오류 문구를 돌려준다(성공이면 null). */
     fun setLockPassword(current: String?, new: String, confirm: String): String? {
-        if (settings.hasLockPassword.value && !settings.checkPassword(current ?: "")) return "현재 비밀번호가 틀렸습니다"
+        // 새 비밀번호 모양부터 확인해야 오타 때문에 틀린 횟수가 쌓이지 않는다
         if (new.length < 4) return "비밀번호는 4자 이상으로 해 주세요"
         if (new != confirm) return "새 비밀번호가 서로 다릅니다"
+        if (settings.hasLockPassword.value) settings.tryPassword(current ?: "")?.let { return "현재 " + it }
         settings.setPassword(new)
         notify("영상 잠금 비밀번호를 정했습니다")
         return null
     }
 
-    /** 비밀번호 지우기(잠금도 풀림). */
-    fun removeLockPassword(current: String): Boolean {
-        if (!settings.checkPassword(current)) return false
+    /** 비밀번호 지우기(잠금도 풀림). 성공이면 null, 아니면 오류 문구. */
+    fun removeLockPassword(current: String): String? {
+        settings.tryPassword(current)?.let { return it }
         settings.clearPassword()
         _controller.value?.let { applyVideoEnabled(it) }
         notify("영상 잠금을 없앴습니다")
-        return true
+        return null
     }
 
     fun toggleAudioOnly() {
@@ -335,9 +357,11 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun attachVrSurface(surface: Surface?) {
+        val old = vrSurface
         vrSurface = surface
         val c = _controller.value ?: return
-        if (surface != null) c.setVideoSurface(surface) else c.clearVideoSurface()
+        // 360도를 끌 때 그냥 clearVideoSurface()를 부르면, 먼저 붙은 일반 화면(PlayerView)까지 떼어져 검은 화면이 된다
+        if (surface != null) c.setVideoSurface(surface) else if (old != null) c.clearVideoSurface(old)
     }
 
     /** 화면이 꺼지거나 앱이 뒤로 가도 계속 재생. 영상 디코딩만 멈춰 배터리를 아낀다. */
@@ -401,8 +425,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     /** 검색 결과를 큐로 삼아 고른 곡부터 재생(다음 곡 버튼으로 이어 듣기). */
     fun playSearchResult(index: Int) {
         val s = _state.value
-        playEntries(s.searchResults, index, "검색: ${s.searchQuery}")
-        _state.update { it.copy(backToSearch = true) }
+        playEntries(s.searchResults, index, "검색: ${s.searchQuery}", fromSearch = true)
     }
 
     fun addEntryToPlaylist(playlistId: String, e: MediaEntry) {
@@ -512,8 +535,14 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         val p = library.createPlaylist(name.ifBlank { "새 재생목록" })
         if (open) openPlaylist(p.id)
     }
-    fun renamePlaylist(id: String, name: String) { library.playlist(id)?.let { library.updatePlaylist(it.copy(name = name.ifBlank { it.name })) } }
-    fun deletePlaylist(id: String) { library.deletePlaylist(id); goHome() }
+    fun renamePlaylist(id: String, name: String) = library.renamePlaylist(id, name)
+    fun deletePlaylist(id: String) {
+        library.deletePlaylist(id)
+        // 이 재생목록으로 걸어 둔 자동 시작 예약은 같이 지운다(안 지우면 그 시각에 아무것도 안 나옴)
+        val s = Scheduler.state.value
+        if (s.startAt > 0 && s.startPlaylistId == id) { Scheduler.cancelStart(ctx); notify("이 재생목록의 자동 시작 예약도 지웠습니다") }
+        goHome()
+    }
     fun removeFromPlaylist(id: String, entryId: String) = library.removeFromPlaylist(id, entryId)
     fun moveInPlaylist(id: String, from: Int, to: Int) = library.moveInPlaylist(id, from, to)
 
@@ -522,13 +551,15 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         val url = StreamResolver.extractUrl(text) ?: run { notify("링크를 찾지 못했습니다"); return }
         viewModelScope.launch {
             try {
-                val entries = if (YoutubeMeta.playlistId(url) != null && YoutubeMeta.videoId(url) == null) {
+                val entries = if (StreamResolver.isYoutubeUrl(url) && YoutubeMeta.playlistId(url) != null && YoutubeMeta.videoId(url) == null) {
                     if (!_state.value.ytReady) { notify("엔진 준비 중입니다. 잠시 후 다시 시도해 주세요."); return@launch }
                     notify("재생목록을 읽는 중…")
                     YoutubeMeta.expandPlaylist(getApplication(), url)
                 } else listOf(if (StreamResolver.isYoutubeUrl(url)) YoutubeMeta.quickEntry(url) else MediaEntry(title = url, source = url, isLink = true))
+                val before = library.playlist(playlistId)?.items?.size ?: 0
                 library.addToPlaylist(playlistId, entries)
-                notify("${entries.size}개 추가했습니다")
+                val added = (library.playlist(playlistId)?.items?.size ?: 0) - before
+                notify(if (added > 0) "${added}개 추가했습니다" else "이미 들어 있는 영상입니다")
             } catch (e: Exception) {
                 notify("추가 실패: ${e.message}")
             }
@@ -553,7 +584,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     fun updateYtDlp() {
         notify("유튜브 엔진을 업데이트하는 중…")
         viewModelScope.launch(Dispatchers.IO) {
-            val result = runCatching { YoutubeDL.getInstance().updateYoutubeDL(getApplication(), YoutubeDL.UpdateChannel.STABLE) }
+            // 재생·검색 중인 yt-dlp 파일을 도중에 바꾸지 않게, 하던 일이 끝난 뒤에 바꾼다
+            val result = runCatching {
+                StreamResolver.gate.withPermit { YoutubeDL.getInstance().updateYoutubeDL(getApplication(), YoutubeDL.UpdateChannel.STABLE) }
+            }
             withContext(Dispatchers.Main) {
                 result.onSuccess { st ->
                     val v = runCatching { YoutubeDL.getInstance().version(getApplication()) }.getOrNull()

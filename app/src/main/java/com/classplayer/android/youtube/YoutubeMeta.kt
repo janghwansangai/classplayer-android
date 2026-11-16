@@ -4,6 +4,7 @@ import com.classplayer.android.data.MediaEntry
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -44,20 +45,24 @@ object YoutubeMeta {
             val api = "https://www.youtube.com/oembed?format=json&url=" + URLEncoder.encode(canonical, "UTF-8")
             val c = URL(api).openConnection() as HttpURLConnection
             c.connectTimeout = 6000; c.readTimeout = 6000
-            val body = c.inputStream.bufferedReader().readText()
-            title = JSONObject(body).optString("title", url)
+            try {
+                val body = c.inputStream.bufferedReader().use { it.readText() }
+                title = JSONObject(body).optString("title", url).ifBlank { url }
+            } finally { c.disconnect() }
         }
         MediaEntry(title = title, source = canonical, isLink = true, thumbnail = id?.let(::thumbnailFor))
     }
 
     /** 재생목록 링크를 항목 목록으로 펼친다(yt-dlp 필요). */
     suspend fun expandPlaylist(context: android.content.Context, url: String): List<MediaEntry> = withContext(Dispatchers.IO) {
-        val req = YoutubeDLRequest(url).withCache(context).apply {
+        StreamResolver.awaitEngine(context)
+        val req = YoutubeDLRequest(url).withDefaults(context).apply {
             addOption("--flat-playlist")
             addOption("--no-warnings")
             addOption("--print", "%(id)s\t%(title)s\t%(duration)s")
         }
-        val out = YoutubeDL.getInstance().execute(req).out
+        // yt-dlp는 한 번에 하나만 돌린다(동시에 돌리면 서로 느려진다)
+        val out = StreamResolver.gate.withPermit { YoutubeDL.getInstance().execute(req).out }
         out.lineSequence().mapNotNull { line ->
             val p = line.split('\t')
             if (p.size < 2 || p[0].isBlank()) return@mapNotNull null
@@ -68,6 +73,6 @@ object YoutubeMeta {
                 durationSec = p.getOrNull(2)?.toDoubleOrNull()?.toLong() ?: 0,
                 thumbnail = thumbnailFor(p[0]),
             )
-        }.toList()
+        }.distinctBy { it.source }.toList()
     }
 }

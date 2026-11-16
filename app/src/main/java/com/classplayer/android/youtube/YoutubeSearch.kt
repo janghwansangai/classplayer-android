@@ -7,7 +7,6 @@ import com.classplayer.android.data.MediaEntry
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
@@ -18,13 +17,10 @@ import kotlinx.coroutines.withContext
 object YoutubeSearch {
     suspend fun search(context: Context, query: String, limit: Int = 20): List<MediaEntry> = withContext(Dispatchers.IO) {
         val app = context.applicationContext
-        (app as? ClassPlayerApp)?.let { a ->
-            val st = a.ytReady.first { it !is ClassPlayerApp.YtState.Loading }
-            if (st is ClassPlayerApp.YtState.Failed) error("유튜브 엔진 준비 실패")
-        }
+        StreamResolver.awaitEngine(app)
         StreamResolver.gate.withPermit {
             val t0 = System.currentTimeMillis()
-            val req = YoutubeDLRequest("ytsearch$limit:$query").withCache(app).apply {
+            val req = YoutubeDLRequest("ytsearch$limit:$query").withDefaults(app).apply {
                 addOption("--flat-playlist")
                 addOption("--no-warnings")
                 addOption("--print", "%(id)s\t%(title)s\t%(channel,uploader)s\t%(duration)s")
@@ -43,7 +39,7 @@ object YoutubeSearch {
                     thumbnail = YoutubeMeta.thumbnailFor(id),
                     channel = p.getOrNull(2)?.takeIf { it != "NA" && it.isNotBlank() },
                 )
-            }.toList()
+            }.distinctBy { it.source }.toList() // 같은 영상이 두 번 오면 목록 키가 겹쳐 앱이 죽는다
         }
     }
 }

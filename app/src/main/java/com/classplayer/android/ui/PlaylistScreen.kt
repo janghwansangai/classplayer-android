@@ -38,8 +38,10 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.activity.compose.BackHandler
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -85,6 +87,8 @@ fun PlaylistScreen(
     val rowPx = with(LocalDensity.current) { 72.dp.toPx() }
     var dragIndex by remember { mutableIntStateOf(-1) }
     var dragOffset by remember { mutableFloatStateOf(0f) }
+    // 화면 왼쪽 위 뒤로 버튼뿐 아니라 시스템 뒤로 가기(제스처)로 나가도 바꾼 이름을 저장한다
+    BackHandler { onRename(name); onBack() }
 
     Column(Modifier.fillMaxSize().background(Bg)) {
         Row(Modifier.padding(start = 4.dp, end = 12.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -127,17 +131,20 @@ fun PlaylistScreen(
         LazyColumn(Modifier.weight(1f).padding(horizontal = 14.dp)) {
             itemsIndexed(playlist.items, key = { _, e -> e.id }) { i, e ->
                 val lifted = i == dragIndex
+                val index by rememberUpdatedState(i)
+                val lastIndex by rememberUpdatedState(playlist.items.lastIndex)
                 Row(
                     Modifier.fillMaxWidth().height(72.dp).background(if (lifted) Surface else Bg)
-                        .pointerInput(playlist.id, i) {
+                        // 키를 순서(i)가 아닌 항목(id)으로 둬야, 끄는 도중 한 칸 옮겨져도 끌기가 끊기지 않는다
+                        .pointerInput(playlist.id, e.id) {
                             detectDragGesturesAfterLongPress(
-                                onDragStart = { dragIndex = i; dragOffset = 0f },
+                                onDragStart = { dragIndex = index; dragOffset = 0f },
                                 onDragEnd = { dragIndex = -1; dragOffset = 0f },
                                 onDragCancel = { dragIndex = -1; dragOffset = 0f },
                                 onDrag = { change, amount ->
                                     change.consume()
                                     dragOffset += amount.y
-                                    if (dragOffset > rowPx && dragIndex < playlist.items.lastIndex) { onMove(dragIndex, dragIndex + 1); dragIndex += 1; dragOffset -= rowPx }
+                                    if (dragOffset > rowPx && dragIndex < lastIndex) { onMove(dragIndex, dragIndex + 1); dragIndex += 1; dragOffset -= rowPx }
                                     else if (dragOffset < -rowPx && dragIndex > 0) { onMove(dragIndex, dragIndex - 1); dragIndex -= 1; dragOffset += rowPx }
                                 },
                             )

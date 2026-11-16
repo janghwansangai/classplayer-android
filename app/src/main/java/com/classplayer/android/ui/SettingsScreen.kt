@@ -71,9 +71,9 @@ fun SettingsScreen(
     videoLocked: Boolean = false,
     hasLockPassword: Boolean = false,
     onLockVideo: () -> Boolean = { false },
-    onUnlockVideo: (String) -> Boolean = { false },
+    onUnlockVideo: (String) -> String? = { null },
     onSetLockPassword: (String?, String, String) -> String? = { _, _, _ -> null },
-    onRemoveLockPassword: (String) -> Boolean = { false },
+    onRemoveLockPassword: (String) -> String? = { null },
     onShareApp: () -> Unit = {},
     onCopyInstallLink: () -> Unit = {},
 ) {

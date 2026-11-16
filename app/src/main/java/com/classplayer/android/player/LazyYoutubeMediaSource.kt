@@ -35,16 +35,19 @@ class LazyYoutubeMediaSource(
     private val youtubeUrl: String,
     private val onResolved: ((title: String, durationSec: Long) -> Unit)? = null,
 ) : CompositeMediaSource<Unit>() {
+    // 아래 값들은 모두 ExoPlayer 재생 스레드에서만 읽고 쓴다(해석 결과도 그 스레드로 넘겨서 붙인다)
     private var inner: MediaSource? = null
     private var error: IOException? = null
-    private val main = Handler(Looper.getMainLooper())
-    private var released = false
+    private var generation = 0 // 해제·재준비 때마다 올려서 예전 해석 결과가 늦게 와도 무시
 
     override fun getMediaItem(): MediaItem = item
 
     override fun prepareSourceInternal(mediaTransferListener: TransferListener?) {
         super.prepareSourceInternal(mediaTransferListener)
-        released = false
+        // 미디어소스는 재생 스레드에서만 다뤄야 한다. 메인 스레드에서 자식 소스를 준비하면
+        // 스레드가 섞여 가끔 엉뚱한 오류나 멈춤이 생긴다.
+        val playback = Handler(Looper.myLooper() ?: Looper.getMainLooper())
+        val gen = ++generation
         executor.execute {
             try {
                 val stream = runBlocking { StreamResolver.resolve(context, youtubeUrl) }
@@ -67,14 +70,15 @@ class LazyYoutubeMediaSource(
                             MediaItem.Builder().setUri(stream.videoUrl).setMimeType(stream.mimeType).build(),
                         )
                 }
-                main.post {
-                    if (released) return@post
+                playback.post {
+                    if (gen != generation) return@post // 그 사이 해제됐거나 다시 준비됨
                     inner = source
                     prepareChildSource(Unit, source)
                 }
             } catch (e: Exception) {
                 Log.e(ClassPlayerApp.TAG, "유튜브 해석 실패: $youtubeUrl", e)
-                main.post { error = IOException("유튜브 링크를 열 수 없습니다: ${e.message}", e) }
+                val msg = e.message?.lineSequence()?.lastOrNull { it.isNotBlank() } ?: e.toString()
+                playback.post { if (gen == generation) error = IOException("유튜브 링크를 열 수 없습니다: $msg", e) }
             }
         }
     }
@@ -98,7 +102,7 @@ class LazyYoutubeMediaSource(
     }
 
     override fun releaseSourceInternal() {
-        released = true
+        generation++
         inner = null
         error = null
         super.releaseSourceInternal()

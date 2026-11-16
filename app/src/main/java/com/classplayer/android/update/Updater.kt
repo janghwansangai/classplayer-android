@@ -2,7 +2,10 @@ package com.classplayer.android.update
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.ConnectivityManager
+import androidx.core.content.pm.PackageInfoCompat
+import kotlinx.coroutines.sync.Mutex
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -78,42 +81,76 @@ object Updater {
         return !cm.isActiveNetworkMetered
     }
 
+    private val downloading = Mutex()
+
     suspend fun download(ctx: Context) = withContext(Dispatchers.IO) {
-        val a = _state.value as? State.Available ?: return@withContext
-        val dir = File(ctx.cacheDir, "updates").apply { mkdirs() }
-        dir.listFiles()?.forEach { it.delete() } // 예전 파일 정리
-        val out = File(dir, "ClassPlayer-${a.version}.apk")
-        val part = File(dir, out.name + ".part")
-        runCatching {
-            _state.value = State.Downloading(a.version, 0f)
-            val c = URL(a.url).openConnection() as HttpURLConnection
-            c.setRequestProperty("User-Agent", "ClassPlayer-Android")
-            c.instanceFollowRedirects = true
-            c.connectTimeout = 15_000; c.readTimeout = 30_000
-            val total = c.contentLengthLong.takeIf { it > 0 } ?: a.size
-            c.inputStream.use { input ->
-                part.outputStream().use { output ->
-                    val buf = ByteArray(64 * 1024)
+        // 자동 내려받기와 버튼이 겹쳐도 한 번만 받는다(같은 파일에 둘이 쓰면 깨진다)
+        if (!downloading.tryLock()) return@withContext
+        try {
+            val a = _state.value as? State.Available ?: return@withContext
+            val dir = File(ctx.cacheDir, "updates").apply { mkdirs() }
+            dir.listFiles()?.forEach { it.delete() } // 예전 파일 정리
+            val out = File(dir, "ClassPlayer-${a.version}.apk")
+            val part = File(dir, out.name + ".part")
+            runCatching {
+                _state.value = State.Downloading(a.version, 0f)
+                val c = URL(a.url).openConnection() as HttpURLConnection
+                c.setRequestProperty("User-Agent", "ClassPlayer-Android")
+                c.instanceFollowRedirects = true
+                c.connectTimeout = 15_000; c.readTimeout = 30_000
+                try {
+                    if (c.responseCode !in 200..299) error("서버 응답 ${c.responseCode}")
+                    val total = c.contentLengthLong.takeIf { it > 0 } ?: a.size
                     var done = 0L
-                    var lastReport = 0L
-                    while (true) {
-                        val n = input.read(buf)
-                        if (n < 0) break
-                        output.write(buf, 0, n)
-                        done += n
-                        if (total > 0 && done - lastReport > 512 * 1024) {
-                            _state.value = State.Downloading(a.version, done.toFloat() / total)
-                            lastReport = done
+                    c.inputStream.use { input ->
+                        part.outputStream().use { output ->
+                            val buf = ByteArray(64 * 1024)
+                            var lastReport = 0L
+                            while (true) {
+                                val n = input.read(buf)
+                                if (n < 0) break
+                                output.write(buf, 0, n)
+                                done += n
+                                if (total > 0 && done - lastReport > 512 * 1024) {
+                                    _state.value = State.Downloading(a.version, done.toFloat() / total)
+                                    lastReport = done
+                                }
+                            }
                         }
                     }
-                }
+                    // 와이파이가 중간에 끊겨도 스트림이 '정상 종료'처럼 끝날 수 있다. 크기가 다르면 깨진 파일이다
+                    if (total > 0 && done != total) error("파일을 끝까지 받지 못했습니다(${done / 1024 / 1024}/${total / 1024 / 1024}MB)")
+                } finally { c.disconnect() }
+                if (!part.renameTo(out)) error("받은 파일을 저장하지 못했습니다")
+                verifyApk(ctx, out)
+                _state.value = State.Ready(a.version, out)
+            }.onFailure { e ->
+                Log.w(ClassPlayerApp.TAG, "업데이트 내려받기 실패", e)
+                part.delete(); out.delete()
+                _state.value = State.Failed("내려받기 실패: ${e.message}")
             }
-            part.renameTo(out)
-            _state.value = State.Ready(a.version, out)
-        }.onFailure { e ->
-            part.delete()
-            _state.value = State.Failed("내려받기 실패: ${e.message}")
-        }
+        } finally { downloading.unlock() }
+    }
+
+    /**
+     * 받은 APK가 설치해도 되는 파일인지 미리 확인한다(무결성).
+     * - 안드로이드가 읽을 수 있는 온전한 앱 파일인지(깨졌으면 여기서 걸림)
+     * - 이 앱(같은 패키지)인지, 지금보다 새 버전인지
+     * - 서명 키가 같은지(다르면 설치 화면에서 '앱이 설치되지 않았습니다'만 뜨므로 이유를 먼저 알려 준다)
+     */
+    @Suppress("DEPRECATION")
+    private fun verifyApk(ctx: Context, apk: File) {
+        val pm = ctx.packageManager
+        val sigFlag = if (Build.VERSION.SDK_INT >= 28) PackageManager.GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES
+        val info = pm.getPackageArchiveInfo(apk.absolutePath, sigFlag) ?: error("받은 파일이 깨져 있습니다. 다시 받아 주세요")
+        if (info.packageName != ctx.packageName) error("클래스플레이어 파일이 아닙니다")
+        val mine = pm.getPackageInfo(ctx.packageName, sigFlag)
+        if (PackageInfoCompat.getLongVersionCode(info) <= PackageInfoCompat.getLongVersionCode(mine)) error("지금 버전보다 새 버전이 아닙니다")
+        fun signers(p: android.content.pm.PackageInfo): Set<String>? =
+            (if (Build.VERSION.SDK_INT >= 28) p.signingInfo?.apkContentsSigners else p.signatures)?.map { it.toCharsString() }?.toSet()?.takeIf { it.isNotEmpty() }
+        val theirs = signers(info)
+        val ours = signers(mine)
+        if (theirs != null && ours != null && theirs != ours) error("서명 키가 달라 설치할 수 없습니다(다른 컴퓨터에서 만든 파일)")
     }
 
     /**
@@ -122,6 +159,7 @@ object Updater {
      */
     fun install(ctx: Context): Boolean {
         val r = _state.value as? State.Ready ?: return false
+        if (!r.file.exists()) { _state.value = State.Failed("받은 파일이 지워졌습니다. 다시 받아 주세요"); return false }
         if (Build.VERSION.SDK_INT >= 26 && !ctx.packageManager.canRequestPackageInstalls()) {
             ctx.startActivity(
                 Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${ctx.packageName}"))

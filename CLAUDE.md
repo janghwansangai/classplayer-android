@@ -12,10 +12,17 @@
 - v0.2.0(시안 B 다크 뮤직형): 재생목록/즐겨찾기/최근은 `data/LibraryRepository`(files/library.json). 유튜브 큐는 `player/LazyYoutubeMediaSource`가 재생 직전에 yt-dlp로 푼다(ExoPlayer가 다음 곡을 미리 준비하므로 곡 넘김이 빠름). 링크 제목·썸네일은 `youtube/YoutubeMeta`(oEmbed, 재생목록 링크는 yt-dlp --flat-playlist). 앱이 뒤로 가면 영상 트랙만 끄고 계속 재생(`onAppBackground`).
 - 디자인 시안 캔버스: https://claude.ai/artifact/W1fDqmSqS5ZZZ7tvy2LZch (A 밝은 카드형, B 다크 뮤직형(채택), C 한 손 미니멀).
 - v0.3.0: 설정 화면(Screen.Settings), 녹화(record/RecordManager), 예약(schedule/), 업데이트(update/Updater, 깃허브 releases/latest의 .apk), 오류 신고(PlayerViewModel.openBugReport, 프로그램 ID class-player-app). 화면 가장자리는 MainActivity의 safeDrawingPadding으로 처리(가로 전체화면 제외).
-- 유튜브 속도: youtubedl-android는 --cache-dir가 없으면 --no-cache-dir을 붙인다(withCache로 지정). 그래도 yt-dlp 2026.10은 JS 시험 답을 디스크에 안 남겨서 매번 QuickJS로 푼다. 대신 StreamResolver가 푼 주소를 cacheDir/streams.json에 만료 전까지 저장하고, yt-dlp는 한 번에 하나만 돌린다(Semaphore). 403이면 한 번 지우고 다시 푼다.
+- 유튜브 속도: youtubedl-android는 --cache-dir가 없으면 --no-cache-dir을 붙인다(withDefaults로 지정, --socket-timeout 15도 같이). 그래도 yt-dlp 2026.10은 JS 시험 답을 디스크에 안 남겨서 매번 QuickJS로 푼다. 대신 StreamResolver가 푼 주소를 cacheDir/streams.json에 만료 전까지 저장하고, yt-dlp는 한 번에 하나만 돌린다(Semaphore). 403이면 한 번 지우고 다시 푼다.
 - LazyYoutubeMediaSource는 TimelineWithUpdatedMediaItem으로 원래 MediaItem을 돌려줘야 제목·큐 동기화가 맞는다.
 - 예약 시작(안드로이드 15): 알람으로 시작한 포그라운드 서비스는 오디오 포커스 요청이 막힌다(HardeningEnforcer, procState 4여도). 그래서 예약 재생 때만 handleAudioFocus=false, 사용자가 직접 재생을 누르면 다시 켠다. playWhenReady를 prepare 전에 켜야 Media3가 포그라운드를 유지한다.
 - 예약 알람은 앱 업데이트/재설치 때 지워지므로 앱 시작과 MY_PACKAGE_REPLACED, BOOT_COMPLETED에서 Scheduler.restore.
 - 자동 업데이트는 같은 서명 키가 필요하다. 지금은 이 맥의 ~/.android/debug.keystore로 릴리스를 서명하므로 다른 컴퓨터에서 빌드하면 업데이트 설치가 실패한다.
 - v0.4.0 유튜브 검색: youtube/YoutubeSearch.kt(yt-dlp "ytsearch20:검색어" --flat-playlist --print id/title/channel/duration, 데스크톱과 같은 방식, 에뮬레이터 약 3초), ui/SearchScreen.kt. 홈 입력칸에서 링크가 아니면 검색(PlayerViewModel.openText). 검색 결과에서 재생하면 뒤로 가기 때 검색 화면으로 돌아간다(backToSearch).
+- v0.6.1 안정성 점검(2026-11-16):
+  - 재생 오류 처리는 PlaybackService.recover(화면 없이 예약 재생할 때도 동작): 403이면 곡마다 한 번 다시 풀기, 안 되는 곡은 다음 곡으로(전부 안 되면 멈춤). 안내 문구는 PlaybackService.messages → 뷰모델 토스트.
+  - LazyYoutubeMediaSource는 해석 결과를 재생 스레드(prepareSourceInternal 때의 Looper)로 넘기고 generation으로 늦게 온 결과를 버린다. 메인 스레드로 넘기면 안 된다.
+  - library.json은 AtomicFile로 저장, 못 읽으면 library.broken-시각.json으로 보관. 여러 스레드가 고치므로 LibraryRepository 안에서 lock으로 읽고-고치고-저장.
+  - 앱 시작 때 yt-dlp 업데이트는 최대 20초만 기다린다(라이브러리의 업데이트 확인에 시간 제한이 없음). 내 기기 영상은 엔진 준비를 기다리지 않는다(requireReady(needsYoutube)).
+  - 새 APK는 받은 뒤 크기·패키지·버전·서명을 확인(Updater.verifyApk).
+  - 잠금 비밀번호 5번 틀리면 30초부터 두 배씩(최대 10분) 대기(AppSettings.tryPassword).
 - v0.5.0 영상 잠금: AppSettings(lockSalt/lockHash SHA-256, videoLocked), PlayerViewModel.lockVideo/unlockVideo/setLockPassword/removeLockPassword, ui/VideoLock.kt 대화상자. 잠기면 applyVideoEnabled가 영상 트랙을 끄고 화면엔 자물쇠. 사용자 요청은 "영상(화면)만" 잠그기 — 유튜브 재생·소리는 막지 않는다(2026-11-15 확인).

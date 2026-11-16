@@ -52,7 +52,8 @@ data class Playlist(
                 id = o.optString("id", UUID.randomUUID().toString()),
                 name = o.optString("name", "재생목록"),
                 colorIndex = o.optInt("colorIndex", 0),
-                items = (0 until arr.length()).map { MediaEntry.fromJson(arr.getJSONObject(it)) },
+                // 항목 하나가 깨져도 재생목록 전체를 잃지 않게 그 항목만 건너뛴다
+                items = (0 until arr.length()).mapNotNull { runCatching { MediaEntry.fromJson(arr.getJSONObject(it)) }.getOrNull() },
             )
         }
     }

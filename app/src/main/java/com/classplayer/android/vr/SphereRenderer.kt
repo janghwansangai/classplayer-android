@@ -45,6 +45,7 @@ class SphereRenderer(private val onSurfaceReady: (Surface) -> Unit) : GLSurfaceV
     private var aPos = 0; private var aTex = 0; private var uMvp = 0; private var uSt = 0
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
+        release() // GL 문맥이 다시 만들어진 경우 예전 텍스처를 남기지 않는다
         buildSphere(rows = 48, cols = 96)
         program = buildProgram(VERTEX, FRAGMENT)
         aPos = GLES20.glGetAttribLocation(program, "aPosition")

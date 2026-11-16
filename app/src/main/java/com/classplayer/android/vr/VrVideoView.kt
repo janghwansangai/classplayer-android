@@ -16,7 +16,9 @@ import android.view.Surface
 @SuppressLint("ViewConstructor")
 class VrVideoView(context: Context, private val onSurface: (Surface?) -> Unit) : GLSurfaceView(context) {
     private val main = Handler(Looper.getMainLooper())
-    private val renderer = SphereRenderer { s -> main.post { onSurface(s) } }
+    private var detached = false
+    // 화면이 이미 닫혔는데 늦게 온 Surface를 플레이어에 붙이지 않게 막는다
+    private val renderer = SphereRenderer { s -> main.post { if (!detached) onSurface(s) } }
     private var lastX = 0f; private var lastY = 0f
     private var dragging = false
 
@@ -63,8 +65,10 @@ class VrVideoView(context: Context, private val onSurface: (Surface?) -> Unit) :
     fun resetView() { renderer.yawDeg = 0f; renderer.pitchDeg = 0f; renderer.fovDeg = 80f }
 
     override fun onDetachedFromWindow() {
+        detached = true
         onSurface(null)
-        renderer.release()
+        // GL 스레드를 먼저 멈춘 뒤(super가 끝날 때까지 기다림) 텍스처를 풀어야, 그리는 도중에 풀려서 죽는 일이 없다
         super.onDetachedFromWindow()
+        renderer.release()
     }
 }

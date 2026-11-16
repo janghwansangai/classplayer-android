@@ -3,6 +3,7 @@ package com.classplayer.android
 import android.Manifest
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -55,7 +56,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (Build.VERSION.SDK_INT >= 33) askNotification.launch(Manifest.permission.POST_NOTIFICATIONS)
+        // 파일 고르는 동안 앱이 메모리에서 지워졌다 돌아와도 어느 재생목록에 넣을지 기억한다
+        pickTargetPlaylist = savedInstanceState?.getString(KEY_PICK_TARGET)
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            askNotification.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
         setContent {
@@ -138,8 +143,8 @@ class MainActivity : ComponentActivity() {
                     }
                     UiState.Screen.PlaylistEdit -> {
                         val p = playlists.firstOrNull { it.id == state.editingPlaylistId }
-                        BackHandler { vm.goHome() }
-                        if (p == null) vm.goHome() else PlaylistScreen(
+                        // 뒤로 가기는 PlaylistScreen 안에서 처리한다(바꾼 이름 저장)
+                        if (p == null) LaunchedEffect(Unit) { vm.goHome() } else PlaylistScreen(
                             playlist = p, repeatMode = state.repeatMode, shuffle = state.shuffle, ytReady = state.ytReady,
                             onBack = vm::goHome,
                             onRename = { vm.renamePlaylist(p.id, it) },
@@ -212,7 +217,15 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        handleIntent(intent)
+        // 화면이 다시 만들어질 때(앱이 메모리에서 지워졌다 돌아옴)나 최근 앱 목록에서 다시 열 때는
+        // 처음 받았던 공유 링크·파일이 그대로 다시 들어오므로 처리하지 않는다(엉뚱한 예전 영상이 재생됨)
+        val fromHistory = (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
+        if (savedInstanceState == null && !fromHistory) handleIntent(intent)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString(KEY_PICK_TARGET, pickTargetPlaylist)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -247,4 +260,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() { super.onStart(); vm.onAppForeground() }
     override fun onStop() { super.onStop(); vm.onAppBackground() }
+
+    private companion object {
+        const val KEY_PICK_TARGET = "pickTargetPlaylist"
+    }
 }

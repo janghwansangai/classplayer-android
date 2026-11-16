@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -112,7 +113,8 @@ fun SearchScreen(
             onDismissRequest = { adding = null },
             title = { Text("재생목록에 추가") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                // 재생목록이 많아도 아래 '새 재생목록' 칸이 밀려 사라지지 않게 스크롤한다
+                Column(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(e.title, color = Muted, fontSize = 13.sp, maxLines = 2)
                     playlists.forEach { p ->
                         Text(

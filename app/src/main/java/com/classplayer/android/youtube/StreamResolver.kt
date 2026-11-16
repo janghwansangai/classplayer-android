@@ -142,15 +142,18 @@ object StreamResolver {
      * yt-dlp로 스트림 주소를 푼다. 1080p 이하, 호환성이 좋은 H.264+AAC를 우선하고
      * 없으면 아무 조합이나 쓴다.
      */
+    /** 알람으로 앱이 막 켜진 경우 등, 엔진(yt-dlp) 준비가 끝날 때까지 기다린다. 실패했으면 예외. */
+    suspend fun awaitEngine(context: Context) {
+        val a = context.applicationContext as? ClassPlayerApp ?: return
+        val st = a.ytReady.first { it !is ClassPlayerApp.YtState.Loading }
+        if (st is ClassPlayerApp.YtState.Failed) error("유튜브 엔진 준비 실패: ${st.message}")
+    }
+
     private suspend fun doResolve(app: Context, url: String, maxHeight: Int): ResolvedStream {
-        // 알람으로 앱이 막 켜진 경우 등, 엔진 준비가 끝날 때까지 기다린다
-        (app as? ClassPlayerApp)?.let { a ->
-            val st = a.ytReady.first { it !is ClassPlayerApp.YtState.Loading }
-            if (st is ClassPlayerApp.YtState.Failed) error("유튜브 엔진 준비 실패: ${st.message}")
-        }
+        awaitEngine(app)
         return gate.withPermit {
         val t0 = System.currentTimeMillis()
-        val request = YoutubeDLRequest(url).withCache(app).apply {
+        val request = YoutubeDLRequest(url).withDefaults(app).apply {
             addOption("--no-playlist")
             addOption("--no-warnings")
             addOption(
@@ -217,9 +220,13 @@ object StreamResolver {
 }
 
 /**
- * yt-dlp 캐시 폴더 지정. youtubedl-android는 이 옵션이 없으면 --no-cache-dir을 붙여서
- * 매번 유튜브 플레이어 스크립트를 새로 받고 서명 풀이를 다시 한다(곡마다 수십 초).
+ * 모든 yt-dlp 요청에 붙이는 기본 옵션.
+ * - 캐시 폴더: youtubedl-android는 이 옵션이 없으면 --no-cache-dir을 붙여서
+ *   매번 유튜브 플레이어 스크립트를 새로 받고 서명 풀이를 다시 한다(곡마다 수십 초).
+ * - 연결 시간 제한: 없으면 학교 와이파이가 끊길 때 yt-dlp가 끝없이 기다리고, yt-dlp는
+ *   한 번에 하나만 돌리므로(gate) 그 뒤의 재생·검색이 모두 멈춘다.
  */
-fun YoutubeDLRequest.withCache(context: Context): YoutubeDLRequest = apply {
+fun YoutubeDLRequest.withDefaults(context: Context): YoutubeDLRequest = apply {
     addOption("--cache-dir", File(context.applicationContext.cacheDir, "yt-dlp").apply { mkdirs() }.absolutePath)
+    addOption("--socket-timeout", "15")
 }

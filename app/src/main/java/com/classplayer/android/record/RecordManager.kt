@@ -19,7 +19,8 @@ import com.classplayer.android.ClassPlayerApp
 import com.classplayer.android.data.MediaEntry
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
-import com.classplayer.android.youtube.withCache
+import com.classplayer.android.youtube.StreamResolver
+import com.classplayer.android.youtube.withDefaults
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -27,7 +28,6 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
@@ -114,10 +114,20 @@ class RecordManager(private val app: ClassPlayerApp) {
 
     fun cancel(id: String) {
         val job = _jobs.value.firstOrNull { it.id == id } ?: return
-        if (job.isLink) runCatching { YoutubeDL.getInstance().destroyProcessById(id) }
-        else main.post { transformers.remove(id)?.cancel() }
-        finish(job, null)
-        deletePartials(job.baseName)
+        if (job.isLink) {
+            runCatching { YoutubeDL.getInstance().destroyProcessById(id) }
+            finish(job, null)
+            deletePartials(job.baseName)
+            // 프로세스가 멈추면서 마지막 조각을 쓸 수 있어 잠시 뒤 한 번 더 지운다(같은 이름으로 새로 시작했으면 건드리지 않음)
+            main.postDelayed({
+                if (_jobs.value.none { it.baseName == job.baseName }) scope.launch { deletePartials(job.baseName); _saved.value = scan() }
+            }, 1500)
+        } else main.post {
+            // 변환을 먼저 멈춘 뒤에 지워야 반쯤 쓴 파일이 '저장됨'에 남지 않는다
+            transformers.remove(id)?.cancel()
+            deletePartials(job.baseName)
+            finish(job, null)
+        }
     }
 
     fun delete(f: SavedFile) {
@@ -129,9 +139,8 @@ class RecordManager(private val app: ClassPlayerApp) {
     private fun recordYoutube(job: RecordJob, url: String, startMs: Long?, endMs: Long?) {
         scope.launch {
             try {
-                val st = app.ytReady.first { it !is ClassPlayerApp.YtState.Loading }
-                if (st is ClassPlayerApp.YtState.Failed) error("유튜브 엔진 준비 실패")
-                val req = YoutubeDLRequest(url).withCache(app).apply {
+                StreamResolver.awaitEngine(app)
+                val req = YoutubeDLRequest(url).withDefaults(app).apply {
                     addOption("--no-playlist")
                     addOption("--no-warnings")
                     addOption("--newline")
